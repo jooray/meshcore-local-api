@@ -36,8 +36,8 @@ Clients:
 * nostrmesh, a bridge between Nostr and MeshCore.
 * The MeshCore-BTC bot.
 
-Both servers predate this specification and need small changes to conform; see SPEC.md
-appendix B.
+Appendix A of SPEC.md lists where the servers still differ, and appendix B what each one changes
+to conform.
 
 ## License
 

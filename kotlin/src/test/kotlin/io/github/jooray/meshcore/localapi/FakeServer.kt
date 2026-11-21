@@ -43,7 +43,8 @@ class FakeServer : Closeable {
     /** Close with 4003 after a valid `pair` (the user denied, or the key is revoked). */
     @Volatile var refusePairing = false
     @Volatile var deviceConnected: Boolean? = true
-    @Volatile var capabilities: List<String>? = emptyList()
+    /** What `hello.capabilities` lists; [BASE] unless a test changes it. */
+    @Volatile var capabilities: List<String>? = BASE
     val channels: MutableList<String> = CopyOnWriteArrayList(listOf("#test"))
     /** `channels.join`: null adds the channel, otherwise the error code. */
     @Volatile var joinError: String? = null
@@ -120,8 +121,8 @@ class FakeServer : Closeable {
                     val nonce = "n" + System.nanoTime().toString().padStart(20, '0')
                     expected = Pairing.PREFIX + nonce
                     val message = challengeMessage(nonce)
-                    // The server verifies what it put in `message` (or the legacy string if none).
-                    expected = message ?: (Pairing.LEGACY_PREFIX + nonce)
+                    // The server verifies what it put in `message`.
+                    expected = message ?: (Pairing.PREFIX + nonce)
                     send(buildJsonObject {
                         put("type", "pairing.challenge")
                         put("protocol", 1)
@@ -165,6 +166,15 @@ class FakeServer : Closeable {
                         custom(this, method, params)?.let { send(withId(it, msg["id"]!!)) }
                         return
                     }
+                    // A strict server refuses a feature it does not offer.
+                    val caps = capabilities.orEmpty()
+                    val unsupported = (method == "channels.join" && "channels_join" !in caps) ||
+                        (params.containsKey("region") && "regions" !in caps) ||
+                        (params.containsKey("path") && "tx_path_data" !in caps)
+                    if (unsupported) {
+                        send(error(msg["id"]!!, "unsupported"))
+                        return
+                    }
                     answer(msg["id"]!!, method, params)
                 }
             }
@@ -181,7 +191,8 @@ class FakeServer : Closeable {
                     val sid = "s${subscriptionIds.incrementAndGet()}"
                     subscriptions.add(sid to params)
                     send(ok(id, buildJsonObject { put("subscriptionId", sid) }))
-                    val since = params.string("since")
+                    // A server without `replay` ignores `since`.
+                    val since = params.string("since")?.takeIf { "replay" in capabilities.orEmpty() }
                     if (since != null) {
                         val types = params.ints("dataTypes")
                         archive.filter { e ->
@@ -252,6 +263,9 @@ class FakeServer : Closeable {
     }
 
     companion object {
+        /** Everything but the routed-send and radio extensions. */
+        val BASE = listOf("contacts", "advert_send", "regions", "channels_join", "replay", "radio_stats")
+
         fun ok(id: JsonElement, result: JsonObject) = buildJsonObject {
             put("id", id)
             put("ok", true)

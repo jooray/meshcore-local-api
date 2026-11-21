@@ -1,5 +1,5 @@
 import { EventEmitter } from 'node:events';
-import { ApiError, ConnectionClosed, PairingError, RequestTimeout } from './errors.mjs';
+import { ApiError, ConnectionClosed, MissingCapability, PairingError, RequestTimeout } from './errors.mjs';
 import { signChallenge } from './keys.mjs';
 
 export const DEFAULT_URL = 'ws://127.0.0.1:8787/api/v1';
@@ -7,6 +7,33 @@ export const CLOSE_REFUSED = 4003;
 export const DEFAULT_TIMEOUT_MS = 15_000;
 // channels.join is answered by the user in a dialog (two minutes on the server side).
 export const METHOD_TIMEOUTS_MS = Object.freeze({ 'channels.join': 150_000 });
+// Methods that exist only with a capability (SPEC section 13).
+export const METHOD_CAPABILITIES = Object.freeze({
+  'contacts.list': 'contacts', 'direct.sendText': 'contacts', 'advert.send': 'advert_send',
+  'regions.list': 'regions', 'regions.resolve': 'regions', 'channels.join': 'channels_join',
+  'radio.stats': 'radio_stats', 'packet.sendRaw': 'raw_tx',
+});
+// Event types and subscription filters that need a capability.
+export const EVENT_CAPABILITIES = Object.freeze({ 'direct.text': 'contacts', advert: 'contacts', 'packet.raw': 'raw_rx' });
+export const FILTER_CAPABILITIES = Object.freeze({ since: 'replay', pubkeys: 'contacts', payloadTypes: 'raw_rx' });
+
+const present = (v) => v !== undefined && v !== null && !(Array.isArray(v) && v.length === 0);
+
+// The capabilities a request needs, from the method and the parameters it carries.
+export function requiredCapabilities(method, params = {}) {
+  const p = params ?? {};
+  const need = [];
+  if (METHOD_CAPABILITIES[method]) need.push(METHOD_CAPABILITIES[method]);
+  if (method === 'channel.sendData' || method === 'channel.sendText') {
+    if (present(p.region)) need.push('regions');
+    if (p.path !== undefined && p.path !== null) need.push(method === 'channel.sendData' ? 'tx_path_data' : 'tx_path_text');
+  }
+  if (method === 'events.subscribe') {
+    for (const [k, cap] of Object.entries(FILTER_CAPABILITIES)) if (present(p[k])) need.push(cap);
+    for (const t of Array.isArray(p.events) ? p.events : []) if (EVENT_CAPABILITIES[t]) need.push(EVENT_CAPABILITIES[t]);
+  }
+  return [...new Set(need)];
+}
 const LOOPBACK = /^ws:\/\/(127\.0\.0\.1|localhost|\[::1\])(:\d+)?(\/|$)/;
 
 export function isLoopbackUrl(url) {
@@ -205,6 +232,11 @@ export class LocalApiConnection extends EventEmitter {
     return new Promise((resolve, reject) => {
       if (!this.paired) {
         reject(new ConnectionClosed('not paired', method));
+        return;
+      }
+      const missing = requiredCapabilities(method, params).find(c => !this.capabilities.has(c));
+      if (missing) {
+        reject(new MissingCapability(missing, method));
         return;
       }
       const id = this.nextId++;

@@ -51,21 +51,6 @@
       "highSDerBase64": "MEUCIE06E9rqT3uegWmygI+ChZttyQ7N+X+khUAMBctZo3yhAiEAkDd383dMmw6DrVDGhlZKnWkzFSzIRoaL2O6j32LUunw="
     },
     {
-      "nonce": "d3zXMrhxhqHuEyHUe4MkXA",
-      "nonceForm": "unpadded",
-      "messageForm": "legacy",
-      "message": "meshcore-open-pair-v1:d3zXMrhxhqHuEyHUe4MkXA",
-      "messageUtf8Hex": "6d657368636f72652d6f70656e2d706169722d76313a64337a584d726878687148754579485565344d6b5841",
-      "sha256Hex": "4f23f319c715d833c4ac94f7bf83d65c7b32dd51f45085020bdd35dad8590067",
-      "rHex": "2e527953ae6b93b9d0ae7d83a75a5f5fc1a7119461f0f26f8deb2ab54ddc2cba",
-      "sHex": "8de2ae00ec000d2a8c09faad85efa6f912ff21b2dc6bcbabf4c3f78f49e66e52",
-      "derBase64": "MEUCIC5SeVOua5O50K59g6daX1/BpxGUYfDyb43rKrVN3Cy6AiEAjeKuAOwADSqMCfqthe+m+RL/IbLca8ur9MP3j0nmblI=",
-      "rawBase64": "LlJ5U65rk7nQrn2Dp1pfX8GnEZRh8PJvjesqtU3cLLqN4q4A7AANKowJ+q2F76b5Ev8hstxry6v0w/ePSeZuUg==",
-      "sIsLow": false,
-      "highSRawBase64": "LlJ5U65rk7nQrn2Dp1pfX8GnEZRh8PJvjesqtU3cLLpyHVH+E//y1nP2BVJ6EFkGqefY+sqr0tj+9dMzsny2/w==",
-      "highSDerBase64": "MEQCIC5SeVOua5O50K59g6daX1/BpxGUYfDyb43rKrVN3Cy6AiByHVH+E//y1nP2BVJ6EFkGqefY+sqr0tj+9dMzsny2/w=="
-    },
-    {
       "nonce": "d3zXMrhxhqHuEyHUe4MkXA==",
       "nonceForm": "padded",
       "messageForm": "canonical",
@@ -79,21 +64,6 @@
       "sIsLow": true,
       "highSRawBase64": "BpME4QI2KlCPWhpgZsqJaDVAO/mkCa6yrEmtF0mlSAeHck0UM2hbvPp7gb3jlu0XOz4cIx6yBACmOqeauZZXHQ==",
       "highSDerBase64": "MEUCIAaTBOECNipQj1oaYGbKiWg1QDv5pAmusqxJrRdJpUgHAiEAh3JNFDNoW7z6e4G945btFzs+HCMesgQApjqnmrmWVx0="
-    },
-    {
-      "nonce": "d3zXMrhxhqHuEyHUe4MkXA==",
-      "nonceForm": "padded",
-      "messageForm": "legacy",
-      "message": "meshcore-open-pair-v1:d3zXMrhxhqHuEyHUe4MkXA==",
-      "messageUtf8Hex": "6d657368636f72652d6f70656e2d706169722d76313a64337a584d726878687148754579485565344d6b58413d3d",
-      "sha256Hex": "8fceb3c422d6ec2728865b618f8aa9d0b7b9b481f5b164f3134744e22265732a",
-      "rHex": "243d1f8bd078d2b5bb59e1a3adf3ab4460cca178646d0f97d49ed8fe48ecb3ba",
-      "sHex": "5335739147f1cb006d77979e99c8e073684c06a082fcb9f12dc094daadc229ad",
-      "derBase64": "MEQCICQ9H4vQeNK1u1nho63zq0RgzKF4ZG0Pl9Se2P5I7LO6AiBTNXORR/HLAG13l56ZyOBzaEwGoIL8ufEtwJTarcIprQ==",
-      "rawBase64": "JD0fi9B40rW7WeGjrfOrRGDMoXhkbQ+X1J7Y/kjss7pTNXORR/HLAG13l56ZyOBzaEwGoIL8ufEtwJTarcIprQ==",
-      "sIsLow": true,
-      "highSRawBase64": "JD0fi9B40rW7WeGjrfOrRGDMoXhkbQ+X1J7Y/kjss7qsyoxtuA41AJKIaGFmNx+MVJr0DSQa5JPF+TXoTqD7pA==",
-      "highSDerBase64": "MEUCICQ9H4vQeNK1u1nho63zq0RgzKF4ZG0Pl9Se2P5I7LO6AiEArMqMbbgONQCSiGhhZjcfjFSa9A0kGuSTxfk16E6g+6Q="
     }
   ],
   "invalidSignatures": {
@@ -101,7 +71,7 @@
     "message": "meshcore-local-api-pair-v1:d3zXMrhxhqHuEyHUe4MkXA",
     "cases": [
       {
-        "why": "signature over the legacy string, checked against the canonical string",
+        "why": "signature over another string with the same nonce (meshcore-open-pair-v1:<nonce>)",
         "signatureBase64": "MEUCIC5SeVOua5O50K59g6daX1/BpxGUYfDyb43rKrVN3Cy6AiEAjeKuAOwADSqMCfqthe+m+RL/IbLca8ur9MP3j0nmblI="
       },
       {
@@ -181,13 +151,13 @@
     }
   ],
   "challengeMessageCheck": {
-    "description": "A client accepts the challenge's message only when it equals one of these, built from the challenge's own nonce.",
+    "description": "A client accepts the challenge's message only when it equals this, built from the challenge's own nonce.",
     "nonce": "d3zXMrhxhqHuEyHUe4MkXA",
     "accept": [
-      "meshcore-local-api-pair-v1:d3zXMrhxhqHuEyHUe4MkXA",
-      "meshcore-open-pair-v1:d3zXMrhxhqHuEyHUe4MkXA"
+      "meshcore-local-api-pair-v1:d3zXMrhxhqHuEyHUe4MkXA"
     ],
     "reject": [
+      "meshcore-open-pair-v1:d3zXMrhxhqHuEyHUe4MkXA",
       "meshcore-local-api-pair-v1:d3zXMrhxhqHuEyHUe4MkXA==",
       "meshcore-local-api-pair-v2:d3zXMrhxhqHuEyHUe4MkXA",
       "meshcore-local-api-pair-v1: d3zXMrhxhqHuEyHUe4MkXA",

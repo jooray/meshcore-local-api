@@ -4,21 +4,17 @@ import { dirname } from 'node:path';
 import { PairingError } from './errors.mjs';
 
 export const PAIRING_PREFIX = 'meshcore-local-api-pair-v1:';
-export const LEGACY_PAIRING_PREFIX = 'meshcore-open-pair-v1:';
-export const PAIRING_PREFIXES = [PAIRING_PREFIX, LEGACY_PAIRING_PREFIX];
 const NONCE_SHAPE = /^[A-Za-z0-9_-]{16,128}={0,2}$/;
 
 // The exact string to sign for a `pairing.challenge`, or a PairingError. The challenge's `message`
-// must be one of the two pairing prefixes followed by this challenge's own `nonce`; anything else is
-// refused, so a server cannot make the client sign arbitrary text. A challenge without `message`
-// (older servers) gets the legacy string the protocol defines.
+// must be exactly `meshcore-local-api-pair-v1:` followed by this challenge's own `nonce`. Anything
+// else, including a missing `message`, is refused, so a server cannot make the client sign other text.
 export function pairingMessage(challenge) {
   const nonce = challenge?.nonce;
   if (typeof nonce !== 'string' || !NONCE_SHAPE.test(nonce)) throw new PairingError('malformed pairing nonce');
   const message = challenge.message;
-  if (message === undefined || message === null) return `${LEGACY_PAIRING_PREFIX}${nonce}`;
-  if (typeof message === 'string' && PAIRING_PREFIXES.some(p => message === `${p}${nonce}`)) return message;
-  throw new PairingError('the challenge asks to sign something other than the pairing string');
+  if (typeof message === 'string' && message === `${PAIRING_PREFIX}${nonce}`) return message;
+  throw new PairingError('the challenge does not ask to sign the pairing string for its nonce');
 }
 
 // Base64 of the raw 64-byte X||Y point, which is what the API calls a public key.
@@ -134,7 +130,6 @@ export class JsonFileCursorStore {
 
   get(key) {
     const v = this.data[key];
-    if (typeof v === 'string') return { receivedAt: v, ids: [] };
     if (v && typeof v.receivedAt === 'string') {
       return { receivedAt: v.receivedAt, ids: Array.isArray(v.ids) ? v.ids.filter(i => typeof i === 'string') : [] };
     }

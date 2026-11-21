@@ -8,7 +8,7 @@ import time
 import pytest
 
 from fake_server import NONCE, FakeServer
-from meshcore_localapi import (READY, REFUSED, ConnectionClosed, Cursor, JsonFileStore, LocalApiClient,
+from meshcore_localapi import (READY, required_capabilities, REFUSED, ConnectionClosed, Cursor, JsonFileStore, LocalApiClient,
                                LocalApiError, MemoryStore, MissingCapability, PairingError, PairingKey,
                                RequestTimeout, event_path, load_or_create_key, pairing_message)
 
@@ -42,7 +42,7 @@ def ev(received_at, payload=b"x", **kw):
 
 # ------------------------------------------------------------------------------------ pairing
 
-@pytest.mark.parametrize("mode", ["new", "legacy", "missing"])
+@pytest.mark.parametrize("mode", ["new"])
 def test_handshake_signs_the_pairing_string(mode, key):
     with FakeServer(message_mode=mode, capabilities=["tx_path_data", "rx_meta"],
                     limits={"maxPayloadBytes": 150}) as srv:
@@ -54,7 +54,7 @@ def test_handshake_signs_the_pairing_string(mode, key):
         c.close()
 
 
-@pytest.mark.parametrize("mode", ["foreign", "other-nonce"])
+@pytest.mark.parametrize("mode", ["legacy", "missing", "foreign", "other-nonce", "padded"])
 def test_foreign_challenge_message_is_refused(mode, key):
     with FakeServer(message_mode=mode) as srv:
         c = client(srv, key).start()
@@ -66,8 +66,8 @@ def test_foreign_challenge_message_is_refused(mode, key):
 
 def test_pairing_message_checks():
     assert pairing_message({"nonce": NONCE, "message": "meshcore-local-api-pair-v1:" + NONCE}).endswith(NONCE)
-    assert pairing_message({"nonce": NONCE}) == "meshcore-open-pair-v1:" + NONCE
-    for bad in ({"nonce": "short"}, {"nonce": NONCE, "message": "meshcore-open-pair-v1:" + NONCE + "x"},
+    for bad in ({"nonce": "short"}, {"nonce": NONCE}, {"nonce": NONCE, "message": "meshcore-open-pair-v1:" + NONCE},
+                {"nonce": NONCE, "message": "meshcore-local-api-pair-v1:" + NONCE + "x"},
                 {"nonce": NONCE, "message": 5}, {"nonce": NONCE + ":x"}):
         with pytest.raises(PairingError):
             pairing_message(bad)
@@ -261,16 +261,10 @@ def test_since_replay_dedupe_and_cursor(key, tmp_path):
         c.close()
 
 
-def test_legacy_string_cursor(tmp_path):
-    p = tmp_path / "s.json"
-    p.write_text(json.dumps({"cursor": {"#nostr": "2026-11-13T10:00:00.000Z"}}))
-    assert JsonFileStore(p).get_cursor("#nostr") == Cursor("2026-11-13T10:00:00.000Z", [])
-
-
 # ------------------------------------------------------------------------------------ send
 
 def test_path_only_with_capability(key):
-    for caps in ([], ["tx_path_data"]):
+    for caps in (["regions"], ["regions", "tx_path_data"]):
         with FakeServer(capabilities=caps) as srv:
             srv.handlers["channel.sendData"] = lambda p, ws: {"queued": True}
             c = client(srv, key).start()
@@ -278,7 +272,7 @@ def test_path_only_with_capability(key):
             assert c.send_data("#test", 0xFF00, b"hi", region="sk") == {"queued": True}
             sent = srv.methods("channel.sendData")[-1]
             assert "path" not in sent and "pathHashSize" not in sent and sent["region"] == "sk"
-            if not caps:
+            if "tx_path_data" not in caps:
                 with pytest.raises(MissingCapability) as e:
                     c.send_data("#test", 0xFF00, b"hi", path=[])
                 assert e.value.code == "unsupported" and len(srv.methods("channel.sendData")) == 1
@@ -336,3 +330,62 @@ def test_file_store_creates_key_with_0600(tmp_path):
     assert len(k.public_raw) == 64 and len(base64.b64decode(k.public_key_b64)) == 64
     assert len(k.fingerprint) == 19
     assert load_or_create_key(MemoryStore(k.to_der())).public_raw == k.public_raw
+
+
+# ------------------------------------------------------------------------------------ capability gating
+
+def test_required_capabilities():
+    assert required_capabilities("device.info", {}) == []
+    assert required_capabilities("channel.sendData", {"region": "x", "path": ""}) == ["regions", "tx_path_data"]
+    assert required_capabilities("channel.sendText", {"path": "a1"}) == ["tx_path_text"]
+    assert required_capabilities("channel.sendData", {"region": None, "path": None}) == []
+    assert required_capabilities("events.subscribe", {"since": "t", "pubkeys": [], "events": ["advert", "packet.raw"]}) \
+        == ["replay", "contacts", "raw_rx"]
+    for m, cap in (("contacts.list", "contacts"), ("direct.sendText", "contacts"), ("advert.send", "advert_send"),
+                   ("regions.list", "regions"), ("regions.resolve", "regions"), ("channels.join", "channels_join"),
+                   ("radio.stats", "radio_stats"), ("packet.sendRaw", "raw_tx")):
+        assert required_capabilities(m, {}) == [cap]
+
+
+def test_features_without_capability_send_nothing(key):
+    with FakeServer(capabilities=[]) as srv:
+        srv.handlers["channel.sendData"] = lambda p, ws: {"queued": True}
+        c = client(srv, key).start()
+        assert c.wait_paired(5)
+        calls = [lambda: c.send_data("#test", 1, b"x", region="sk"),
+                 lambda: c.send_text("#test", "hi", region="sk"),
+                 lambda: c.request("channel.sendText", {"channel": "#test", "text": "hi", "path": ""})]
+        calls += [lambda m=m: c.request(m, {}) for m in ("contacts.list", "direct.sendText", "advert.send",
+                                                         "regions.list", "regions.resolve", "channels.join",
+                                                         "radio.stats", "packet.sendRaw")]
+        calls += [lambda: c.request("events.subscribe", {"since": "2026-11-13T10:00:00Z"}),
+                  lambda: c.request("events.subscribe", {"events": ["direct.text"]})]
+        for call in calls:
+            with pytest.raises(MissingCapability):
+                call()
+        assert srv.requests == []
+        c.send_data("#test", 1, b"x")
+        assert [m for m, _ in srv.requests] == ["channel.sendData"]
+        c.close()
+
+
+def test_subscribe_without_replay_or_join(key):
+    with FakeServer(capabilities=[]) as srv:
+        srv.handlers["events.subscribe"] = lambda p, ws: ("error", {"code": "unknown_channel"}) \
+            if p.get("channel") == "#new" else {"subscriptionId": "s1"}
+        store = MemoryStore()
+        store.set_cursor("k", Cursor("2026-11-13T10:00:00Z", []))
+        c = client(srv, key, cursor_store=store).start()
+        assert c.wait_paired(5)
+        sub = c.subscribe({"channel": "#test"}, cursor_key="k")
+        until(lambda: sub.active)
+        assert "since" not in srv.methods("events.subscribe")[0]  # no replay: since omitted
+        missing = c.subscribe({"channel": "#new"}, join=True)
+        until(lambda: missing.error is not None)
+        time.sleep(0.2)
+        assert missing.error.code == "unknown_channel" and srv.methods("channels.join") == []  # no channels_join
+        contacts = c.subscribe({"pubkeys": ["ab" * 32]})
+        until(lambda: contacts.error is not None)
+        assert isinstance(contacts.error, MissingCapability) and contacts.error.capability == "contacts"
+        assert not any("pubkeys" in p for p in srv.methods("events.subscribe"))  # never sent
+        c.close()

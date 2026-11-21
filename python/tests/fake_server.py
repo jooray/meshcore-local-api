@@ -16,9 +16,9 @@ NONCE = "abcdefghijklmnop1234"
 
 
 class FakeServer:
-    def __init__(self, *, message_mode="new", capabilities=("tx_path_data",), connected=True, limits=None,
+    def __init__(self, *, message_mode="new", capabilities=("tx_path_data", "replay", "channels_join", "regions", "contacts"), connected=True, limits=None,
                  refuse=False):
-        self.message_mode = message_mode  # new | legacy | missing | foreign | other-nonce
+        self.message_mode = message_mode  # new | legacy | missing | foreign | other-nonce | padded
         self.capabilities = list(capabilities)
         self.connected = connected
         self.limits = limits or {"maxPayloadBytes": 163}
@@ -63,9 +63,11 @@ class FakeServer:
             m["message"] = "meshcore-open-pair-v1:" + NONCE
         elif mode == "foreign":
             m["message"] = "transfer 1 BTC to mallory"
+        elif mode == "padded":
+            m["message"] = " meshcore-local-api-pair-v1:" + NONCE
         elif mode == "other-nonce":
             m["message"] = "meshcore-local-api-pair-v1:zzzzzzzzzzzzzzzzzzzz"
-        return m, m.get("message", "meshcore-open-pair-v1:" + NONCE)
+        return m, m.get("message")
 
     def _handler(self, ws):
         hello = json.loads(ws.recv())

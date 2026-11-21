@@ -122,23 +122,21 @@ class ClientIdentity private constructor(
 
 /** The pairing rule: which challenge strings this client agrees to sign. */
 object Pairing {
-    /** The protocol's own prefix. */
+    /** The only accepted prefix. */
     const val PREFIX = "meshcore-local-api-pair-v1:"
-    /** What MeshCore Open's first server sends; still accepted. */
-    const val LEGACY_PREFIX = "meshcore-open-pair-v1:"
 
     val NONCE_SHAPE = Regex("^[A-Za-z0-9_-]{16,128}={0,2}$")
 
     /**
      * The exact string to sign for a `pairing.challenge`, or null to refuse it. The challenge's
-     * `message` must be one of the two prefixes followed by the challenge's own `nonce`, and the
-     * nonce must look like one. Anything else is refused, so whatever listens on the port cannot
+     * `message` must be exactly [PREFIX] followed by the challenge's own `nonce`, and the nonce
+     * must look like one. Anything else is refused, so whatever listens on the port cannot
      * use this client to sign a string of its choosing.
      */
     fun messageToSign(challenge: JsonObject): String? {
         val nonce = (challenge["nonce"] as? JsonPrimitive)?.takeIf { it.isString }?.content ?: return null
         if (!NONCE_SHAPE.matches(nonce)) return null
         val message = (challenge["message"] as? JsonPrimitive)?.takeIf { it.isString }?.content ?: return null
-        return message.takeIf { it == PREFIX + nonce || it == LEGACY_PREFIX + nonce }
+        return message.takeIf { it == PREFIX + nonce }
     }
 }

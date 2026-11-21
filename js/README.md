@@ -60,10 +60,18 @@ and `close` events, no reconnect), for code that runs its own connection loop.
 
 - Pairing: sends `hello` with the public key (base64 of the raw 64-byte X||Y point of a P-256
   key), signs the challenge, and waits for `hello` from the server. It signs the challenge's
-  `message` only if it is `meshcore-local-api-pair-v1:<nonce>` or the older
-  `meshcore-open-pair-v1:<nonce>` for that challenge's nonce. Any other message closes the
-  connection without signing. A challenge with no `message` gets the older string, which is what
-  servers without the field verify.
+  `message` only if it is exactly `meshcore-local-api-pair-v1:<nonce>` for that challenge's
+  nonce. Any other message, or none, closes the connection without signing. Servers that still
+  send the older `meshcore-open-pair-v1:` prefix are not supported.
+- Capabilities are strict: the client never uses a feature whose name is missing from
+  `hello.capabilities` (SPEC sections 8 and 13). `request()` rejects with `MissingCapability` and sends
+  nothing for `contacts.list` and `direct.sendText` (`contacts`), `advert.send` (`advert_send`),
+  `regions.list`, `regions.resolve` and a `region` on a send (`regions`), `channels.join`
+  (`channels_join`), `radio.stats` (`radio_stats`), `packet.sendRaw` (`raw_tx`), `path` on
+  `channel.sendData` (`tx_path_data`) or `channel.sendText` (`tx_path_text`), and in
+  `events.subscribe` for `since` (`replay`), `pubkeys` and the `direct.text` and `advert` events
+  (`contacts`), `payloadTypes` and `packet.raw` (`raw_rx`). `requiredCapabilities(method, params)`
+  returns the list for a request.
 - Requests get ids and a timeout each: 15 s by default, 150 s for `channels.join`, because the
   user answers that one in a dialog. Pass a timeout per call or `methodTimeoutsMs` to change
   them. A disconnect rejects the waiting requests at once with `ConnectionClosed`.
@@ -76,13 +84,13 @@ and `close` events, no reconnect), for code that runs its own connection loop.
 - Subscriptions registered with `subscribe()` are made after every pairing and again after a
   `device` push with `connected: true` while they are not active. Channel subscriptions wait for
   the radio. With `join: true`, an `unknown_channel` answer asks the user to add the channel, once
-  per connection.
-- Replay: with `cursorKey` the subscription sends `since` from the stored cursor. `since` is
+  per connection, when the server lists `channels_join`.
+- Replay: with `cursorKey` the subscription sends `since` from the stored cursor when the server
+  lists `replay` (without it, `since` is left out and nothing is replayed). `since` is
   inclusive, so the cursor keeps the ids of the events at its timestamp and the client drops the
   events a replay repeats. The cursor moves after the `event` listeners return.
-- `sendData()` puts `path` and `pathHashSize` on `channel.sendData` only when the server lists
-  `tx_path_data`. Without it, a call with `path` rejects with `MissingCapability` and sends
-  nothing, because an older server would ignore the path and flood.
+- `sendData()` puts `path` and `pathHashSize` on `channel.sendData` only with `tx_path_data`;
+  a server without it could ignore the path and flood.
 - Reconnect: 1 s doubling to 30 s with jitter, back to 1 s after a successful pairing. After a
   close with 4003 (not approved, or revoked) it waits 2 minutes.
 - Optional heartbeat: `heartbeatMs` sends `device.info` at that interval and drops a connection

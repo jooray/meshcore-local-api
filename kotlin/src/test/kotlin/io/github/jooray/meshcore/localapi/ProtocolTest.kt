@@ -115,6 +115,33 @@ class ProtocolTest {
     }
 
     @Test
+    fun `capability gating table`() {
+        fun miss(method: String, params: String, vararg caps: String) =
+            MeshCoreApiClient.missingCapability(method, json(params), caps.toSet())
+        assertNull(miss("device.info", "{}"))
+        assertNull(miss("channels.list", "{}"))
+        assertNull(miss("channel.sendData", """{"channel":"#t","dataType":1,"payload":"AQ=="}"""))
+        assertNull(miss("events.subscribe", """{"events":["channel.data"],"channel":"#t"}"""))
+        assertNull(miss("events.subscribe", """{"since":null}"""))
+        assertEquals("channels_join", miss("channels.join", """{"name":"#x"}"""))
+        assertNull(miss("channels.join", """{"name":"#x"}""", "channels_join"))
+        assertEquals("contacts", miss("contacts.list", "{}"))
+        assertEquals("contacts", miss("direct.sendText", "{}"))
+        assertEquals("advert_send", miss("advert.send", "{}"))
+        assertEquals("regions", miss("regions.list", "{}"))
+        assertEquals("regions", miss("regions.resolve", "{}"))
+        assertEquals("radio_stats", miss("radio.stats", "{}"))
+        assertEquals("regions", miss("channel.sendData", """{"region":"xx"}"""))
+        assertEquals("regions", miss("channel.sendText", """{"region":"xx"}"""))
+        assertEquals("tx_path_data", miss("channel.sendData", """{"path":""}""", "regions"))
+        assertEquals("tx_path_text", miss("channel.sendText", """{"path":""}""", "tx_path_data"))
+        assertNull(miss("channel.sendData", """{"path":"","region":"xx"}""", "regions", "tx_path_data"))
+        assertEquals("replay", miss("events.subscribe", """{"since":"2026-01-01T10:00:00.000Z"}"""))
+        assertEquals("contacts", miss("events.subscribe", """{"pubkeys":["ab"]}"""))
+        assertEquals("contacts", miss("events.subscribe", """{"events":["direct.text"]}"""))
+    }
+
+    @Test
     fun `direct paths are checked`() {
         assertTrue(Route.Direct(ByteArray(63), 1).valid)
         assertFalse(Route.Direct(ByteArray(64), 1).valid)

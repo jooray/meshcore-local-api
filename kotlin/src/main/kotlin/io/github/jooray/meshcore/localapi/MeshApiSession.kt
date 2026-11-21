@@ -155,9 +155,10 @@ class MeshApiSession(
 
     /**
      * Sends one datagram. A [route] other than [Route.Flood] goes out only when the server has
-     * [Capabilities.TX_PATH_DATA]; otherwise nothing is sent (`unsupported`), so a zero-hop send
-     * never turns into a flood. A refused [region] shows in [SessionState.Connected.unknownRegion]
-     * until a send goes through.
+     * [Capabilities.TX_PATH_DATA]; otherwise nothing is sent (`unsupported`, with
+     * [ApiError.missingCapability]), so a zero-hop send never turns into a flood. [region] is
+     * left out when the server lacks [Capabilities.REGIONS] (logged once). A refused [region]
+     * shows in [SessionState.Connected.unknownRegion] until a send goes through.
      */
     suspend fun sendData(
         payload: ByteArray,
@@ -169,9 +170,14 @@ class MeshApiSession(
         val c = client ?: return ApiResult.Failed(ApiError(ErrorCodes.DISCONNECTED))
         // Checked here too so that a refused route does not touch the region state.
         if (route != Route.Flood && !c.has(Capabilities.TX_PATH_DATA)) {
-            return ApiResult.Failed(ApiError(ErrorCodes.UNSUPPORTED, "server lacks ${Capabilities.TX_PATH_DATA}"))
+            return ApiResult.Failed(ApiError.missingCapability(Capabilities.TX_PATH_DATA))
         }
-        val scoped = region?.trim()?.takeIf { it.isNotEmpty() && route != Route.ZeroHop }
+        var scoped = region?.trim()?.takeIf { it.isNotEmpty() && route != Route.ZeroHop }
+        if (scoped != null && !c.has(Capabilities.REGIONS)) {
+            // The server cannot scope: send with the channel's own scope rather than not at all.
+            noteMissing(Capabilities.REGIONS)
+            scoped = null
+        }
         val answer = c.sendData(channel, dataType, payload, scoped, route)
         if (answer.errorCode != ErrorCodes.DISCONNECTED) {
             logic.onSendAnswer(answer, scoped)
@@ -207,7 +213,9 @@ class MeshApiSession(
             c.onHello = { hello ->
                 attempts = 0
                 _device.value = DeviceUpdate(hello.device, null)
-                perform(logic.onHello(hello.device), c)
+                val canJoin = Capabilities.CHANNELS_JOIN in hello.capabilities
+                if (!canJoin && config.joinChannel) noteMissing(Capabilities.CHANNELS_JOIN)
+                perform(logic.onHello(hello.device, canJoin), c)
             }
             c.onDevicePush = { update ->
                 _device.value = update
@@ -275,7 +283,7 @@ class MeshApiSession(
     }
 
     private suspend fun subscribeMain(c: MeshCoreApiClient) {
-        val answer = c.subscribe(EventFilter.channelData(config.channel, config.dataTypes, connectionSince))
+        val answer = c.subscribe(EventFilter.channelData(config.channel, config.dataTypes, sinceFor(c)))
         if (c !== client) return
         if (!answer.isOk) logger.warn(TAG, "subscribe failed: ${answer.errorCode}")
         perform(logic.onSubscribeAnswer(answer), c)
@@ -299,9 +307,10 @@ class MeshApiSession(
             if (c !== client || !running) return@withLock
             if (synchronized(extrasSubscribed) { name in extrasSubscribed }) continue
             if (push != null && !push.hasChannel(name)) continue
-            val filter = EventFilter.channelData(name, types, connectionSince)
+            val filter = EventFilter.channelData(name, types, sinceFor(c))
             var answer = c.subscribe(filter)
             val ask = answer.errorCode == ErrorCodes.UNKNOWN_CHANNEL && config.joinExtraChannels &&
+                c.has(Capabilities.CHANNELS_JOIN) &&
                 logic.isRadioConnected && synchronized(extrasSubscribed) { extrasJoinAsked.add(name) }
             if (ask && c.joinChannel(name).isOk) answer = c.subscribe(filter)
             if (answer.isOk) {
@@ -327,6 +336,21 @@ class MeshApiSession(
         _events.emit(e)
         if (wanted(d)) _datagrams.emit(d)
         guard.advance(d)
+    }
+
+    /** The connection's cursor, or null when the server has no `replay` (then nothing is replayed). */
+    private fun sinceFor(c: MeshCoreApiClient): String? {
+        val since = connectionSince ?: return null
+        if (c.has(Capabilities.REPLAY)) return since
+        noteMissing(Capabilities.REPLAY)
+        return null
+    }
+
+    private val noted = java.util.Collections.synchronizedSet(HashSet<String>())
+
+    /** Logs once per session that the server lacks [capability] and the session goes without it. */
+    private fun noteMissing(capability: String) {
+        if (noted.add(capability)) logger.info(TAG, "server lacks $capability; not using it")
     }
 
     private fun wanted(d: MeshEvent.ChannelData): Boolean {

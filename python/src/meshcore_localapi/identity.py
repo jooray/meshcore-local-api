@@ -16,27 +16,23 @@ from typing import Protocol
 from .errors import PairingError
 
 PAIRING_PREFIX = "meshcore-local-api-pair-v1:"
-LEGACY_PAIRING_PREFIX = "meshcore-open-pair-v1:"
-PAIRING_PREFIXES = (PAIRING_PREFIX, LEGACY_PAIRING_PREFIX)
 NONCE_SHAPE = re.compile(r"^[A-Za-z0-9_-]{16,128}={0,2}$")
 
 
 def pairing_message(challenge: dict) -> str:
     """The exact string to sign for a `pairing.challenge`, or PairingError.
 
-    The challenge's `message` must be one of the two pairing prefixes followed by this challenge's
-    own `nonce`; anything else is refused, so a server cannot make the client sign arbitrary text.
-    A challenge without `message` (older servers) gets the legacy string the protocol defines.
+    The challenge's `message` must be exactly `meshcore-local-api-pair-v1:` followed by this
+    challenge's own `nonce`. Anything else, including a missing `message`, is refused, so a server
+    cannot make the client sign other text.
     """
     nonce = challenge.get("nonce")
     if not isinstance(nonce, str) or not NONCE_SHAPE.match(nonce):
         raise PairingError("malformed pairing nonce")
     message = challenge.get("message")
-    if message is None:
-        return LEGACY_PAIRING_PREFIX + nonce
-    if isinstance(message, str) and message in (p + nonce for p in PAIRING_PREFIXES):
+    if isinstance(message, str) and message == PAIRING_PREFIX + nonce:
         return message
-    raise PairingError("the challenge asks to sign something other than the pairing string")
+    raise PairingError("the challenge does not ask to sign the pairing string for its nonce")
 
 
 def fingerprint(public_raw: bytes) -> str:
@@ -145,7 +141,7 @@ class JsonFileStore:
     """Key and cursors in one JSON file, mode 0600, written atomically:
     `{"private": "<base64 PKCS#8 DER>", "cursor": {"<key>": {"receivedAt": "...", "ids": [...]}}}`.
 
-    A cursor stored as a bare `receivedAt` string is read as one with no ids. Cursor writes are
+    Cursor writes are
     batched: at most one write per `save_interval` seconds, plus `flush()` (the client flushes on
     every disconnect and on close). Other top-level fields in the file are kept.
     """
@@ -182,8 +178,6 @@ class JsonFileStore:
 
     def get_cursor(self, key: str) -> Cursor | None:
         v = (self.state.get("cursor") or {}).get(key)
-        if isinstance(v, str):
-            return Cursor(v)
         if isinstance(v, dict) and isinstance(v.get("receivedAt"), str):
             ids = [i for i in v.get("ids") or [] if isinstance(i, str)]
             return Cursor(v["receivedAt"], ids)

@@ -23,8 +23,8 @@ function publicKeyFromRaw(raw) {
 }
 
 export class FakeServer {
-  // messageMode: new | legacy | missing | foreign | other-nonce
-  constructor({ messageMode = 'new', capabilities = ['tx_path_data'], connected = true, limits = { maxPayloadBytes: 163 }, refuse = false } = {}) {
+  // messageMode: new | legacy | missing | foreign | other-nonce | padded
+  constructor({ messageMode = 'new', capabilities = ['tx_path_data', 'replay', 'channels_join', 'regions', 'contacts'], connected = true, limits = { maxPayloadBytes: 163 }, refuse = false } = {}) {
     Object.assign(this, { messageMode, capabilities, connected, limits, refuse });
     // method -> (params, ws) => result | { error } | { result, then: [frames] } | null (never answered)
     this.handlers = {};
@@ -58,9 +58,10 @@ export class FakeServer {
       legacy: `meshcore-open-pair-v1:${NONCE}`,
       foreign: 'transfer 1 BTC to mallory',
       'other-nonce': 'meshcore-local-api-pair-v1:zzzzzzzzzzzzzzzzzzzz',
+      padded: ` meshcore-local-api-pair-v1:${NONCE}`,
     };
     if (modes[this.messageMode]) m.message = modes[this.messageMode];
-    return [m, m.message ?? `meshcore-open-pair-v1:${NONCE}`];
+    return [m, m.message];
   }
 
   #handle(ws) {

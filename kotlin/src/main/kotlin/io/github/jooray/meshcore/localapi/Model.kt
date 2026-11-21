@@ -16,14 +16,30 @@ import kotlinx.serialization.json.put
 import java.time.Instant
 import java.util.Base64
 
-/** Optional server features named in `hello.capabilities` (the names meshcored uses). */
+/**
+ * Optional server features named in `hello.capabilities` (SPEC.md section 13). The client never
+ * uses a feature whose name is absent.
+ */
 object Capabilities {
+    /** `contacts.list`, `direct.sendText`, events `direct.text` and `advert`, filter `pubkeys`. */
+    const val CONTACTS = "contacts"
+    /** `advert.send`. */
+    const val ADVERT_SEND = "advert_send"
+    /** `regions.list`, `regions.resolve`, `region` on sends. */
+    const val REGIONS = "regions"
+    /** `channels.join`. */
+    const val CHANNELS_JOIN = "channels_join"
+    /** The channel data archive and `since` in `events.subscribe`. */
+    const val REPLAY = "replay"
+    const val REPLAY_TEXT = "replay_text"
+    /** `radio.stats`. */
+    const val RADIO_STATS = "radio_stats"
     /** `channel.sendData` takes `path` / `pathHashSize` (zero-hop and direct sends). */
     const val TX_PATH_DATA = "tx_path_data"
     const val TX_PATH_TEXT = "tx_path_text"
     /** Received events carry `path` / `pathHashSize` / `routeType`. */
     const val RX_PATH = "rx_path"
-    /** Received events carry `rssiDbm` and more radio metadata. */
+    /** Received events carry `snrDb`, `rssiDbm`, `hops`, `routeType`. */
     const val RX_META = "rx_meta"
     const val RAW_RX = "raw_rx"
     const val RAW_TX = "raw_tx"
@@ -83,6 +99,9 @@ internal fun <T> ApiResponse.toResult(map: (JsonObject) -> T?): ApiResult<T> = w
     ApiResponse.NotConnected -> ApiResult.Failed(ApiError(ErrorCodes.DISCONNECTED))
 }
 
+/** One entry of `contacts.list`. */
+data class Contact(val pubkey: String, val name: String?, val type: Int?, val lastSeen: String?)
+
 /** `channels.join` result. */
 data class JoinResult(val index: Int?, val name: String, val created: Boolean)
 
@@ -99,7 +118,16 @@ object CloseCodes {
     const val BUSY = 4013
 }
 
-data class ApiError(val code: String, val message: String? = null)
+/**
+ * An error. [missingCapability] is set when this client refused the request itself because the
+ * server does not list that capability ([code] is then [ErrorCodes.UNSUPPORTED]); nothing was sent.
+ */
+data class ApiError(val code: String, val message: String? = null, val missingCapability: String? = null) {
+    companion object {
+        fun missingCapability(name: String) =
+            ApiError(ErrorCodes.UNSUPPORTED, "server lacks capability $name", missingCapability = name)
+    }
+}
 
 /** The answer to one request. */
 sealed interface ApiResponse {

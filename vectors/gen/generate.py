@@ -196,7 +196,6 @@ def pairing_vectors():
 
     prefixes = {
         "canonical": "meshcore-local-api-pair-v1:",
-        "legacy": "meshcore-open-pair-v1:",
     }
 
     signatures = []
@@ -233,13 +232,12 @@ def pairing_vectors():
     msg = base["message"]
     r, s = int(base["rHex"], 16), int(base["sHex"], 16)
     der = base64.b64decode(base["derBase64"])
-    legacy_sig = next(
-        x for x in signatures if x["nonce"] == base["nonce"] and x["messageForm"] == "legacy"
-    )
+    other_msg = ("meshcore-open-pair-v1:" + base["nonce"]).encode()
+    other_der = priv.sign(other_msg, ec.ECDSA(hashes.SHA256(), deterministic_signing=True))
     invalid = [
         {
-            "why": "signature over the legacy string, checked against the canonical string",
-            "signatureBase64": legacy_sig["derBase64"],
+            "why": "signature over another string with the same nonce (meshcore-open-pair-v1:<nonce>)",
+            "signatureBase64": b64(other_der),
         },
         {"why": "one bit of s flipped (raw r||s)", "signatureBase64": b64(raw_sig(r, s ^ 1))},
         {"why": "r = 0 (raw r||s)", "signatureBase64": b64(raw_sig(0, s))},
@@ -331,13 +329,13 @@ def pairing_vectors():
         },
         "invalidPublicKeys": public_keys_invalid,
         "challengeMessageCheck": {
-            "description": "A client accepts the challenge's message only when it equals one of these, built from the challenge's own nonce.",
+            "description": "A client accepts the challenge's message only when it equals this, built from the challenge's own nonce.",
             "nonce": nonce_nopad,
             "accept": [
                 "meshcore-local-api-pair-v1:" + nonce_nopad,
-                "meshcore-open-pair-v1:" + nonce_nopad,
             ],
             "reject": [
+                "meshcore-open-pair-v1:" + nonce_nopad,
                 "meshcore-local-api-pair-v1:" + nonce_pad,
                 "meshcore-local-api-pair-v2:" + nonce_nopad,
                 "meshcore-local-api-pair-v1: " + nonce_nopad,

@@ -38,10 +38,10 @@ class ClientTest {
 
     @Test
     fun `handshake with the protocol prefix`() = runBlocking<Unit> {
-        server.capabilities = listOf("tx_path_data", "rx_path")
+        server.capabilities = listOf("tx_path_data", "rx_path", "future_thing")
         val c = client()
         val hello = withTimeout(5_000) { c.connect() }
-        assertEquals(setOf("tx_path_data", "rx_path"), hello.capabilities)
+        assertEquals(setOf("tx_path_data", "rx_path", "future_thing"), hello.capabilities)
         assertTrue(c.has(Capabilities.TX_PATH_DATA))
         assertEquals(163, c.limits!!.maxPayloadBytes)
         assertEquals("Test node", c.device.value!!.device!!.name)
@@ -51,11 +51,45 @@ class ClientTest {
     }
 
     @Test
-    fun `handshake with the legacy prefix`() = runBlocking<Unit> {
-        server.challengeMessage = { Pairing.LEGACY_PREFIX + it }
+    fun `the old meshcore-open prefix is refused`() = runBlocking<Unit> {
+        server.challengeMessage = { "meshcore-open-pair-v1:$it" }
+        val c = client()
+        try {
+            withTimeout(5_000) { c.connect() }
+            fail("connected")
+        } catch (e: MeshApiException.BadChallenge) {
+            // expected
+        }
+        assertNull("no pair frame was sent", server.pairs.poll(300, TimeUnit.MILLISECONDS))
+    }
+
+    @Test
+    fun `features without their capability are refused locally and nothing is sent`() = runBlocking<Unit> {
+        server.capabilities = emptyList()
         val c = client()
         withTimeout(5_000) { c.connect() }
-        assertTrue(server.connections.poll(1, TimeUnit.SECONDS)!!.paired)
+        server.requests.clear()
+        fun check(cap: String, r: ApiResult<*>) {
+            assertEquals(ErrorCodes.UNSUPPORTED, r.errorCode)
+            assertEquals(cap, (r as ApiResult.Failed).error.missingCapability)
+        }
+        check("channels_join", c.joinChannel("#new"))
+        check("regions", c.resolveRegion(0.0, 0.0))
+        check("radio_stats", c.radioStats())
+        check("contacts", c.contactsList())
+        check("contacts", c.sendDirectText("ab", "hi"))
+        check("advert_send", c.advertSend())
+        check("regions", c.sendData("#test", 336, byteArrayOf(1), region = "xx-test"))
+        check("tx_path_data", c.sendData("#test", 336, byteArrayOf(1), route = Route.ZeroHop))
+        check("replay", c.subscribe(EventFilter.channelData("#test", listOf(336), since = "2026-01-01T10:00:00.000Z")))
+        check("contacts", c.subscribe(EventFilter(events = listOf("advert"))))
+        check("regions", c.sendText("#test", "hi", region = "xx-test"))
+        assertEquals("unsupported", c.request("regions.list").errorCode)
+        assertNull("nothing reached the server", server.requests.poll(200, TimeUnit.MILLISECONDS))
+        // Core methods need no capability.
+        assertTrue(c.sendData("#test", 336, byteArrayOf(1)).isOk)
+        assertTrue(c.subscribe(EventFilter.channelData("#test", listOf(336))).isOk)
+        assertTrue(c.deviceInfo().isOk)
         c.close()
     }
 
@@ -167,7 +201,9 @@ class ClientTest {
     fun `path is sent only with tx_path_data`() = runBlocking<Unit> {
         val c = client()
         withTimeout(5_000) { c.connect() }
-        assertEquals(ErrorCodes.UNSUPPORTED, c.sendData("#test", 336, byteArrayOf(1), route = Route.ZeroHop).errorCode)
+        val refused = c.sendData("#test", 336, byteArrayOf(1), route = Route.ZeroHop)
+        assertEquals(ErrorCodes.UNSUPPORTED, refused.errorCode)
+        assertEquals(Capabilities.TX_PATH_DATA, (refused as ApiResult.Failed).error.missingCapability)
         assertTrue(c.sendData("#test", 336, byteArrayOf(1), region = "xx-test").isOk)
         val flood = server.nextRequest("channel.sendData")["params"] as kotlinx.serialization.json.JsonObject
         assertFalse(flood.containsKey("path"))
@@ -175,7 +211,7 @@ class ClientTest {
         assertNull("nothing else was sent", server.requests.poll(200, TimeUnit.MILLISECONDS))
         c.close()
 
-        server.capabilities = listOf("tx_path_data")
+        server.capabilities = FakeServer.BASE + "tx_path_data"
         val c2 = client()
         withTimeout(5_000) { c2.connect() }
         assertTrue(c2.sendData("#test", 336, byteArrayOf(1), region = "xx-test", route = Route.ZeroHop).isOk)

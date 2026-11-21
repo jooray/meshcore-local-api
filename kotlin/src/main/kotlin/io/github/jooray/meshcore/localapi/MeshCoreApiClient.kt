@@ -228,7 +228,9 @@ class MeshCoreApiClient(
     /**
      * Sends one request and waits for its answer. [timeoutMs] defaults to [Timeouts.forMethod]
      * (long for `channels.join`). Only after `hello`; before that the answer is
-     * [ApiResponse.NotConnected].
+     * [ApiResponse.NotConnected]. A method or parameter whose capability the server does not list
+     * ([missingCapability]) is not sent: the answer is `unsupported` with
+     * [ApiError.missingCapability] set.
      */
     suspend fun request(
         method: String,
@@ -237,6 +239,9 @@ class MeshCoreApiClient(
     ): ApiResponse {
         val ws = socket ?: return ApiResponse.NotConnected
         if (_state.value !is ConnectionState.Ready) return ApiResponse.NotConnected
+        missingCapability(method, params, capabilities)?.let {
+            return ApiResponse.Error(ApiError.missingCapability(it))
+        }
         val id = requestIds.incrementAndGet()
         val answer = CompletableDeferred<ApiResponse>()
         pending[id] = answer
@@ -270,10 +275,11 @@ class MeshCoreApiClient(
         request("events.unsubscribe", buildJsonObject { put("subscriptionId", subscriptionId) }).toResult { }
 
     /**
-     * `channel.sendData`. A [route] other than [Route.Flood] is sent only when the server has
-     * [Capabilities.TX_PATH_DATA]; otherwise nothing is sent and the answer is `unsupported`,
-     * because a server without it ignores `path` and would flood. An invalid [Route.Direct] path
-     * is `bad_request`, also without sending. An empty [region] means the channel's own scope.
+     * `channel.sendData`. A [route] other than [Route.Flood] needs [Capabilities.TX_PATH_DATA]
+     * and a [region] needs [Capabilities.REGIONS]; without them nothing is sent and the answer is
+     * `unsupported` (a server without `tx_path_data` would ignore `path` and flood). An invalid
+     * [Route.Direct] path is `bad_request`, also without sending. An empty [region] means the
+     * channel's own scope.
      */
     suspend fun sendData(
         channel: String,
@@ -282,9 +288,6 @@ class MeshCoreApiClient(
         region: String? = null,
         route: Route = Route.Flood,
     ): ApiResult<Unit> {
-        if (route != Route.Flood && !has(Capabilities.TX_PATH_DATA)) {
-            return ApiResult.Failed(ApiError(ErrorCodes.UNSUPPORTED, "server lacks ${Capabilities.TX_PATH_DATA}"))
-        }
         if (route is Route.Direct && !route.valid) {
             return ApiResult.Failed(ApiError(ErrorCodes.BAD_REQUEST, "invalid path"))
         }
@@ -304,6 +307,19 @@ class MeshCoreApiClient(
             put("text", text)
         }).toResult { }
 
+    /** `contacts.list` (capability `contacts`); [limit] 1..500, server default 200. */
+    suspend fun contactsList(limit: Int? = null): ApiResult<List<Contact>> =
+        request("contacts.list", buildJsonObject { limit?.let { put("limit", it) } }).toResult { r ->
+            (r["contacts"] as? kotlinx.serialization.json.JsonArray)?.mapNotNull { e ->
+                val o = e as? JsonObject ?: return@mapNotNull null
+                o.string("pubkey")?.let { Contact(it, o.string("name"), o.int("type"), o.anyString("lastSeen")) }
+            } ?: emptyList()
+        }
+
+    /** `advert.send` (capability `advert_send`); [flood] false is a zero-hop advert. */
+    suspend fun advertSend(flood: Boolean = true): ApiResult<Unit> =
+        request("advert.send", buildJsonObject { put("flood", flood) }).toResult { }
+
     /** `channels.join` for a hashtag channel; waits [Timeouts.joinMs] for the user's answer. */
     suspend fun joinChannel(name: String): ApiResult<JoinResult> =
         request("channels.join", buildJsonObject { put("name", name) }).toResult { r ->
@@ -320,7 +336,7 @@ class MeshCoreApiClient(
             ResolvedRegion(region?.string("name")?.takeIf { it.isNotBlank() && it.length <= 64 }, region?.double("distanceKm"))
         }
 
-    /** `radio.stats` (servers with [Capabilities.AIRTIME]); [RadioStats.preset] is the LoRa preset. */
+    /** `radio.stats` (capability `radio_stats`); [RadioStats.preset] is the LoRa preset. */
     suspend fun radioStats(): ApiResult<RadioStats> = request("radio.stats").toResult { r ->
         RadioStats(RadioParams.parse(r["preset"] as? JsonObject), r)
     }
@@ -439,6 +455,45 @@ class MeshCoreApiClient(
             .writeTimeout(timeouts.socketMs, TimeUnit.MILLISECONDS)
             .pingInterval(timeouts.pingMs, TimeUnit.MILLISECONDS)
             .build()
+
+        private val METHOD_CAPABILITY = mapOf(
+            "contacts.list" to Capabilities.CONTACTS,
+            "direct.sendText" to Capabilities.CONTACTS,
+            "advert.send" to Capabilities.ADVERT_SEND,
+            "regions.list" to Capabilities.REGIONS,
+            "regions.resolve" to Capabilities.REGIONS,
+            "channels.join" to Capabilities.CHANNELS_JOIN,
+            "radio.stats" to Capabilities.RADIO_STATS,
+        )
+
+        /**
+         * The capability a request needs and the server lacks ([capabilities] from `hello`), or
+         * null when it may be sent. Covers the methods of SPEC.md section 8 and the parameters
+         * that change what goes on the air or what is requested: `region` (regions), `path` /
+         * `pathHashSize` (tx_path_data, tx_path_text), `since` (replay), `pubkeys` and the event
+         * types `direct.text` / `advert` (contacts). Core methods need nothing.
+         */
+        fun missingCapability(method: String, params: JsonObject, capabilities: Set<String>): String? {
+            fun need(name: String) = name.takeIf { it !in capabilities }
+            METHOD_CAPABILITY[method]?.let { need(it)?.let { m -> return m } }
+            fun has(key: String) = params[key].let { it != null && it !is kotlinx.serialization.json.JsonNull }
+            when (method) {
+                "channel.sendData", "channel.sendText" -> {
+                    if (has("region")) need(Capabilities.REGIONS)?.let { return it }
+                    if (has("path") || has("pathHashSize")) {
+                        val cap = if (method == "channel.sendData") Capabilities.TX_PATH_DATA else Capabilities.TX_PATH_TEXT
+                        need(cap)?.let { return it }
+                    }
+                }
+                "events.subscribe" -> {
+                    if (has("since")) need(Capabilities.REPLAY)?.let { return it }
+                    if (has("pubkeys")) need(Capabilities.CONTACTS)?.let { return it }
+                    val types = params.strings("events")
+                    if ("direct.text" in types || "advert" in types) need(Capabilities.CONTACTS)?.let { return it }
+                }
+            }
+            return null
+        }
 
         /**
          * `channel.sendData` params. [Route.ZeroHop] is `"path": ""` with `pathHashSize` 1 and no

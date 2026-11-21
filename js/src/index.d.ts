@@ -15,8 +15,6 @@ export class MissingCapability extends ApiError { constructor(capability: string
 export class PairingError extends ApiError { constructor(message: string); }
 
 export const PAIRING_PREFIX: 'meshcore-local-api-pair-v1:';
-export const LEGACY_PAIRING_PREFIX: 'meshcore-open-pair-v1:';
-export const PAIRING_PREFIXES: string[];
 
 export interface PairingKey {
   privateKey: KeyObject;
@@ -65,6 +63,11 @@ export const DEFAULT_TIMEOUT_MS: number;
 export const METHOD_TIMEOUTS_MS: Readonly<Record<string, number>>;
 export const DEFAULT_MAX_PAYLOAD: 163;
 export function isLoopbackUrl(url: string): boolean;
+export const METHOD_CAPABILITIES: Readonly<Record<string, string>>;
+export const EVENT_CAPABILITIES: Readonly<Record<string, string>>;
+export const FILTER_CAPABILITIES: Readonly<Record<string, string>>;
+/** The capabilities a request needs; request() rejects with MissingCapability when one is absent. */
+export function requiredCapabilities(method: string, params?: object | null): string[];
 export function resolveWebSocket(override?: unknown): Promise<unknown>;
 
 export type LocalApiEvent = { type: string; receivedAt?: string; outgoing?: boolean; [field: string]: unknown };

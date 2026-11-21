@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import { after, describe, test } from 'node:test';
 import {
   ApiError, ConnectionClosed, JsonFileCursorStore, LocalApiClient, LocalApiConnection, MemoryCursorStore,
-  MissingCapability, PairingError, RequestTimeout, State, eventPath, generateKey, loadOrCreateKey, pairingMessage,
+  MissingCapability, PairingError, RequestTimeout, State, eventPath, requiredCapabilities, generateKey, loadOrCreateKey, pairingMessage,
 } from '../src/index.mjs';
 import { FakeServer, NONCE, sleep, until } from './fake-server.mjs';
 
@@ -27,7 +27,7 @@ async function setup(serverOpts = {}, clientOpts = {}, prepare = () => {}) {
 }
 
 describe('pairing', () => {
-  for (const mode of ['new', 'legacy', 'missing']) {
+  for (const mode of ['new']) {
     test(`signs the pairing string (${mode})`, async () => {
       const { srv, c, done } = await setup({ messageMode: mode, capabilities: ['tx_path_data', 'rx_meta'], limits: { maxPayloadBytes: 150 } });
       c.start();
@@ -41,7 +41,7 @@ describe('pairing', () => {
     });
   }
 
-  for (const mode of ['foreign', 'other-nonce']) {
+  for (const mode of ['legacy', 'missing', 'foreign', 'other-nonce', 'padded']) {
     test(`refuses a foreign challenge message (${mode})`, async () => {
       const srv = await new FakeServer({ messageMode: mode }).start();
       const conn = new LocalApiConnection({ url: srv.url, key, name: 'test' });
@@ -54,8 +54,8 @@ describe('pairing', () => {
 
   test('pairingMessage', () => {
     assert.equal(pairingMessage({ nonce: NONCE, message: `meshcore-local-api-pair-v1:${NONCE}` }), `meshcore-local-api-pair-v1:${NONCE}`);
-    assert.equal(pairingMessage({ nonce: NONCE }), `meshcore-open-pair-v1:${NONCE}`);
-    for (const bad of [{ nonce: 'short' }, { nonce: NONCE, message: `meshcore-open-pair-v1:${NONCE}x` }, { nonce: NONCE, message: 5 }, {}]) {
+    for (const bad of [{ nonce: 'short' }, { nonce: NONCE }, { nonce: NONCE, message: `meshcore-open-pair-v1:${NONCE}` },
+      { nonce: NONCE, message: `meshcore-local-api-pair-v1:${NONCE}x` }, { nonce: NONCE, message: 5 }, {}]) {
       assert.throws(() => pairingMessage(bad), PairingError);
     }
   });
@@ -213,7 +213,7 @@ describe('subscriptions', () => {
     await r2.done();
   });
 
-  test('legacy string cursor and memory store', () => {
+  test('memory cursor store', () => {
     const m = new MemoryCursorStore();
     m.set('a', { receivedAt: 'x', ids: ['1'] });
     assert.deepEqual(m.get('a'), { receivedAt: 'x', ids: ['1'] });
@@ -222,7 +222,7 @@ describe('subscriptions', () => {
 });
 
 describe('send', () => {
-  for (const caps of [[], ['tx_path_data']]) {
+  for (const caps of [['regions'], ['regions', 'tx_path_data']]) {
     test(`path only with tx_path_data (caps: ${caps.join(',') || 'none'})`, async () => {
       const { srv, c, done } = await setup({ capabilities: caps }, {}, (s) => { s.handlers['channel.sendData'] = () => ({ queued: true }); });
       c.start();
@@ -232,7 +232,7 @@ describe('send', () => {
       assert.equal('path' in sent, false);
       assert.equal('pathHashSize' in sent, false);
       assert.equal(sent.region, 'sk');
-      if (!caps.length) {
+      if (!caps.includes('tx_path_data')) {
         await assert.rejects(c.sendData('#test', 0xFF00, Buffer.from('hi'), { path: [] }),
           (e) => e instanceof MissingCapability && e.code === 'unsupported');
         assert.equal(srv.methods('channel.sendData').length, 1);
@@ -295,6 +295,65 @@ describe('transport', () => {
     c.start();
     assert.equal(await c.waitPaired(), true);
     assert.deepEqual(await c.request('device.info'), { via: 'ws' });
+    await done();
+  });
+});
+
+describe('capability gating', () => {
+  test('requiredCapabilities', () => {
+    assert.deepEqual(requiredCapabilities('device.info', {}), []);
+    assert.deepEqual(requiredCapabilities('channel.sendData', { region: 'x', path: '' }), ['regions', 'tx_path_data']);
+    assert.deepEqual(requiredCapabilities('channel.sendText', { path: 'a1' }), ['tx_path_text']);
+    assert.deepEqual(requiredCapabilities('channel.sendData', { region: null, path: null }), []);
+    assert.deepEqual(requiredCapabilities('events.subscribe', { since: 't', pubkeys: [], events: ['advert', 'packet.raw'] }),
+      ['replay', 'contacts', 'raw_rx']);
+    for (const [m, cap] of [['contacts.list', 'contacts'], ['direct.sendText', 'contacts'], ['advert.send', 'advert_send'],
+      ['regions.list', 'regions'], ['regions.resolve', 'regions'], ['channels.join', 'channels_join'],
+      ['radio.stats', 'radio_stats'], ['packet.sendRaw', 'raw_tx']]) {
+      assert.deepEqual(requiredCapabilities(m, {}), [cap]);
+    }
+  });
+
+  test('features without their capability send nothing', async () => {
+    const { srv, c, done } = await setup({ capabilities: [] }, {}, (s) => { s.handlers['channel.sendData'] = () => ({ queued: true }); });
+    c.start();
+    await c.waitPaired();
+    const calls = [
+      () => c.sendData('#test', 1, Buffer.from('x'), { region: 'sk' }),
+      () => c.sendText('#test', 'hi', { region: 'sk' }),
+      () => c.request('channel.sendText', { channel: '#test', text: 'hi', path: '' }),
+      ...['contacts.list', 'direct.sendText', 'advert.send', 'regions.list', 'regions.resolve', 'channels.join',
+        'radio.stats', 'packet.sendRaw'].map(m => () => c.request(m, {})),
+      () => c.request('events.subscribe', { since: '2026-11-13T10:00:00Z' }),
+      () => c.request('events.subscribe', { events: ['direct.text'] }),
+    ];
+    for (const call of calls) await assert.rejects(call(), MissingCapability);
+    assert.deepEqual(srv.requests, []);
+    await c.sendData('#test', 1, Buffer.from('x'));
+    assert.deepEqual(srv.requests.map(([m]) => m), ['channel.sendData']);
+    await done();
+  });
+
+  test('subscribe omits since without replay and skips join without channels_join', async () => {
+    const store = new MemoryCursorStore();
+    store.set('k', { receivedAt: '2026-11-13T10:00:00Z', ids: [] });
+    const { srv, c, done } = await setup({ capabilities: [] }, { cursorStore: store }, (s) => {
+      s.handlers['events.subscribe'] = (p) => p.channel === '#new' ? { error: { code: 'unknown_channel' } } : { subscriptionId: 's1' };
+    });
+    c.start();
+    await c.waitPaired();
+    const sub = c.subscribe({ channel: '#test' }, { cursorKey: 'k' });
+    await until(() => sub.active);
+    assert.equal('since' in srv.methods('events.subscribe')[0], false);
+    const missing = c.subscribe({ channel: '#new' }, { join: true });
+    await until(() => missing.error);
+    await sleep(150);
+    assert.equal(missing.error.code, 'unknown_channel');
+    assert.deepEqual(srv.methods('channels.join'), []);
+    const contacts = c.subscribe({ pubkeys: ['ab'.repeat(32)] });
+    await until(() => contacts.error);
+    assert.ok(contacts.error instanceof MissingCapability && contacts.error.capability === 'contacts');
+    assert.equal(srv.methods('events.subscribe').some(p => 'pubkeys' in p), false);
     await done();
   });
 });

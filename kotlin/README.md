@@ -55,8 +55,9 @@ The first connection asks the user to approve the app on the host. `state` is
 
 `MeshCoreApiClient` is one connection: `connect()` sends `hello`, signs the pairing challenge and
 returns the server's `Hello` (capabilities, limits, device). Then `request()` and the typed calls
-(`deviceInfo`, `subscribe`, `sendData`, `sendText`, `joinChannel`, `resolveRegion`, `radioStats`)
-match answers by id with a timeout per method (150 s for `channels.join`, 15 s otherwise).
+(`deviceInfo`, `channelsList`, `subscribe`, `sendData`, `sendText`, `sendDirectText`,
+`contactsList`, `advertSend`, `joinChannel`, `resolveRegion`, `radioStats`) match answers by id
+with a timeout per method (150 s for `channels.join`, 15 s otherwise).
 `events` is a Flow of typed events and `device` is a StateFlow of the latest device push.
 Unknown fields and event types are ignored. A client is used once; make a new one to reconnect.
 
@@ -67,9 +68,9 @@ Unknown fields and event types are ignored. A client is used once; make a new on
 - It subscribes after `hello` when the radio is connected. While there is no radio, it waits for
   a `device` push with `connected: true` and subscribes then. A subscription that is already in
   place is kept, because the server keeps it across radio reconnects.
-- If the main channel is missing, it asks once per connection with `channels.join`, and not again
-  for 10 minutes after the user says no.
-- It passes `since` from the `CursorStore`. The server replays inclusively, so the frame at the
+- If the main channel is missing and the server has `channels_join`, it asks once per connection
+  with `channels.join`, and not again for 10 minutes after the user says no.
+- It passes `since` from the `CursorStore` when the server has `replay`. The server replays inclusively, so the frame at the
   cursor comes back each time; the session drops it and any other frame it has already
   delivered.
 - It reconnects with exponential backoff (5 s to 60 s), and waits 2 minutes after the server
@@ -80,11 +81,35 @@ Unknown fields and event types are ignored. A client is used once; make a new on
 - A region the server refuses shows in `SessionState.Connected.unknownRegion` until a send gets
   through.
 
+## Capabilities
+
+The client never uses a feature the server does not list in `hello.capabilities`:
+
+| Capability | Needed for |
+|---|---|
+| `regions` | `regions.list`, `regions.resolve`, `region` on sends |
+| `replay` | `since` in `events.subscribe` |
+| `channels_join` | `channels.join` |
+| `contacts` | `contacts.list`, `direct.sendText`, the `pubkeys` filter, `direct.text` and `advert` events |
+| `advert_send` | `advert.send` |
+| `radio_stats` | `radio.stats` |
+| `tx_path_data` | `path` / `pathHashSize` on `channel.sendData` |
+| `tx_path_text` | `path` / `pathHashSize` on `channel.sendText` |
+
+A request that needs a missing capability is not sent. Its result is an error with code
+`unsupported`, and `ApiError.missingCapability` names the capability.
+`MeshCoreApiClient.missingCapability(method, params, capabilities)` runs the same check on its
+own. The session copes with a missing capability by doing without the feature and logs this once:
+no `since` without `replay`, no region on sends without `regions`, and no `channels.join` without
+`channels_join` (a missing channel then ends in `ChannelMissing`). A zero-hop or direct send
+without `tx_path_data` is not sent at all.
+
 ## Pairing
 
 The client signs the challenge's `message` only when it is exactly
-`meshcore-local-api-pair-v1:<nonce>` or the older `meshcore-open-pair-v1:<nonce>` for the nonce
-in that challenge. It refuses anything else and closes the connection, so a program listening on
+`meshcore-local-api-pair-v1:<nonce>` for the nonce in that challenge. It refuses anything else,
+including a challenge without `message` and the old `meshcore-open-pair-v1:` prefix, and closes
+the connection, so a program listening on
 the port cannot get it to sign a string of its choosing. The key is P-256, the public key goes out
 as base64 of the raw 64-byte X||Y point, and the signature is DER from `SHA256withECDSA`.
 

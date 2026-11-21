@@ -30,6 +30,15 @@ CLOSE_REFUSED = 4003
 DEFAULT_TIMEOUT = 15.0
 # channels.join is answered by the user in a dialog (two minutes on the server side).
 METHOD_TIMEOUTS = {"channels.join": 150.0}
+# Methods that exist only with a capability (SPEC section 13).
+METHOD_CAPABILITIES = {
+    "contacts.list": "contacts", "direct.sendText": "contacts", "advert.send": "advert_send",
+    "regions.list": "regions", "regions.resolve": "regions", "channels.join": "channels_join",
+    "radio.stats": "radio_stats", "packet.sendRaw": "raw_tx",
+}
+# Event types and subscription filters that need a capability.
+EVENT_CAPABILITIES = {"direct.text": "contacts", "advert": "contacts", "packet.raw": "raw_rx"}
+FILTER_CAPABILITIES = {"since": "replay", "pubkeys": "contacts", "payloadTypes": "raw_rx"}
 DEFAULT_MAX_PAYLOAD = 163
 MAX_PATH_BYTES = 64
 MAX_PATH_HOPS = 63
@@ -97,6 +106,27 @@ def _close_code(ws, exc) -> int | None:
         return rcvd.code
     code = getattr(ws, "close_code", None) if ws is not None else None
     return code if isinstance(code, int) else None
+
+
+def required_capabilities(method: str, params: dict | None) -> list[str]:
+    """The capabilities a request needs, from the method and the parameters it carries."""
+    p = params or {}
+    need = []
+    if method in METHOD_CAPABILITIES:
+        need.append(METHOD_CAPABILITIES[method])
+    if method in ("channel.sendData", "channel.sendText"):
+        if p.get("region") is not None:
+            need.append("regions")
+        if p.get("path") is not None:
+            need.append("tx_path_data" if method == "channel.sendData" else "tx_path_text")
+    if method == "events.subscribe":
+        for k, cap in FILTER_CAPABILITIES.items():
+            if p.get(k) not in (None, []):
+                need.append(cap)
+        for t in p.get("events") or []:
+            if t in EVENT_CAPABILITIES:
+                need.append(EVENT_CAPABILITIES[t])
+    return list(dict.fromkeys(need))
 
 
 class Subscription:
@@ -333,6 +363,9 @@ class LocalApiClient:
     def _request(self, method, params=None, timeout=None, on_answer: Callable[[dict], None] | None = None) -> dict:
         if not self.paired:
             raise ConnectionClosed("not paired", method)
+        for cap in required_capabilities(method, params):
+            if cap not in self.capabilities:
+                raise MissingCapability(cap, method)
         if timeout is None:
             timeout = self.method_timeouts.get(method, self.request_timeout)
         rid = next(self._ids)
@@ -397,7 +430,7 @@ class LocalApiClient:
     def _subscribe_one(self, sub: Subscription):
         self._load_cursor(sub)
         params = dict(sub.params)
-        if sub._cursor is not None:
+        if sub._cursor is not None and "replay" in self.capabilities:
             params["since"] = sub._cursor.received_at
         gen = self._generation
 
@@ -417,7 +450,8 @@ class LocalApiClient:
             return
         except LocalApiError as e:
             sub.error = e
-            if not (e.code == "unknown_channel" and sub.join and self.radio_connected):
+            if not (e.code == "unknown_channel" and sub.join and self.radio_connected
+                    and "channels_join" in self.capabilities):
                 log.warning("events.subscribe %s refused: %s", sub.params, e.code)
                 return
         ch = sub.channel

@@ -38,7 +38,8 @@ sealed interface SessionState {
  *    when this connection holds no subscription (one survives the radio going away; a second
  *    would deliver every event twice). The initial state comes from `hello.device`;
  *  - `unknown_channel` while the radio is connected: ask once per connection with
- *    `channels.join`, never within [deniedPauseMs] of a refusal; then subscribe;
+ *    `channels.join` (only when the server has `channels_join`), never within [deniedPauseMs]
+ *    of a refusal; then subscribe;
  *  - `unknown_channel` while it is not: no radio (without one the server knows no channels);
  *  - any other error: refused, with the code.
  *
@@ -89,8 +90,10 @@ internal class SessionLogic(
         @Synchronized get() = authenticated && radioConnected
 
     @Synchronized
-    fun onHello(device: DeviceInfo?): Action {
+    fun onHello(device: DeviceInfo?, canJoin: Boolean = true): Action {
         authenticated = true
+        // Without `channels_join` on the server a missing channel is not asked for.
+        if (!canJoin) joinAsked = true
         deviceName = device?.name
         // Older servers may leave the flag out; then only the subscription can tell.
         radioConnected = device?.connected ?: true

@@ -258,7 +258,7 @@ export class LocalApiClient extends EventEmitter {
       sub.cursorLoaded = true;
     }
     const params = { ...sub.params };
-    if (sub.cursor) params.since = sub.cursor.receivedAt;
+    if (sub.cursor && this.capabilities.has('replay')) params.since = sub.cursor.receivedAt;
     const onAnswer = (msg) => {
       const sid = msg?.ok === true ? msg.result?.subscriptionId : undefined;
       if ((typeof sid === 'string' || typeof sid === 'number') && conn === this.connection && this.subs.includes(sub)) {
@@ -272,7 +272,7 @@ export class LocalApiClient extends EventEmitter {
       return;
     } catch (e) {
       sub.error = e;
-      if (!(e.code === 'unknown_channel' && sub.join && this.radioConnected)) {
+      if (!(e.code === 'unknown_channel' && sub.join && this.radioConnected && this.capabilities.has('channels_join'))) {
         this.log(`events.subscribe ${JSON.stringify(sub.params)} refused: ${e.code}`);
         return;
       }

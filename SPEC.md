@@ -283,7 +283,7 @@ client                                   server
 | `protocol` | integer | `1` for this specification. |
 | `nonce` | string | At least 16 bytes from a cryptographically secure random generator, base64url encoded, with or without `=` padding. It MUST match `^[A-Za-z0-9_-]{16,128}={0,2}$`. A new nonce for every connection. |
 | `fingerprint` | string | The fingerprint of the key in the client's `hello` (section 5.2). |
-| `message` | string | The exact string the client signs: `meshcore-local-api-pair-v1:` followed by `nonce`. See section 12.3 for the legacy prefix. |
+| `message` | string | The exact string the client signs: `meshcore-local-api-pair-v1:` followed by `nonce`. |
 
 The challenge MUST have the same shape whether or not the key is already paired, so an
 unauthenticated caller cannot learn which keys are paired.
@@ -299,9 +299,8 @@ unauthenticated caller cannot learn which keys are paired.
 **The client** MUST check the challenge before signing:
 
 * `nonce` matches the regular expression in section 5.4;
-* `message` is exactly `meshcore-local-api-pair-v1:` + `nonce`, or exactly the legacy
-  `meshcore-open-pair-v1:` + `nonce` (section 12.3), comparing bytes, with no surrounding white
-  space.
+* `message` is exactly `meshcore-local-api-pair-v1:` + `nonce`, comparing bytes, with no
+  surrounding white space.
 
 If either check fails, the client MUST NOT sign and SHOULD close the connection. Otherwise it signs
 the UTF-8 bytes of `message`, exactly as received, with ECDSA over P-256 using SHA-256 (the JCA name
@@ -321,8 +320,7 @@ is `SHA256withECDSA`). It MUST NOT rebuild the string from parts or re-encode th
   INTEGERs, nothing after the SEQUENCE);
 * refuse `r` or `s` outside 1 to n-1, where n is the order of P-256;
 * accept both low-S and high-S signatures (Java and other common signers do not normalize S);
-* verify against the `message` it sent in this connection's challenge (and, during the
-  transition, the legacy string; section 12.3);
+* verify against the `message` it sent in this connection's challenge and nothing else;
 * accept at most one `pair` frame per connection.
 
 `vectors/pairing.json` has valid signatures in both encodings and with high S, and invalid cases
@@ -519,8 +517,7 @@ Sends share these rules:
   not see its message sent later. Clients SHOULD wait at least 15 seconds for a send response.
 * Optional parameters of a send that need a capability (`region`, `path`, `pathHashSize`) are
   described in section 8. A client MUST NOT send them unless the capability is in
-  `hello.capabilities`, except as section 12.4 allows for servers that predate this
-  specification. `path` has no such exception.
+  `hello.capabilities`.
 
 #### `channel.sendData`
 
@@ -682,8 +679,7 @@ subscriptions stay in place across a radio reconnect and need no action.
 ## 8. Optional features
 
 Each feature in this section has a capability name. A server that implements a feature MUST list
-its name in `hello.capabilities`; a client MUST NOT use a feature whose name is absent, except as
-section 12.4 allows for servers that predate this specification. A request
+its name in `hello.capabilities`; a client MUST NOT use a feature whose name is absent. A request
 for a method of a feature the server does not offer fails with `unknown_method` (old servers) or
 `unsupported`.
 
@@ -1213,39 +1209,6 @@ A future incompatible version uses a new path (`/api/v2`) and a new `protocol` v
 serve several versions on their paths. A client that finds no server on the version it implements
 SHOULD say so to its user rather than fall back silently.
 
-### 12.3 Pairing string transition
-
-The canonical signed string is `meshcore-local-api-pair-v1:<nonce>`. Servers deployed before this
-specification send `meshcore-open-pair-v1:<nonce>`. Both are protocol 1, and the challenge's
-`message` field is authoritative:
-
-* Clients MUST sign exactly `message` after checking that it is one of the two forms with the
-  challenge's own nonce (section 5.5).
-* Servers SHOULD send the canonical form. A server that still sends the legacy form conforms
-  during the transition.
-* A server that sends the canonical form SHOULD also accept a valid signature over the legacy
-  string with the same nonce. Some deployed clients build the legacy string from the nonce instead
-  of signing `message`; this keeps them working until they are updated. Both strings bind the same
-  server-chosen nonce, so accepting either does not weaken the handshake.
-
-A later revision of this specification may end the transition. Clients that sign `message` are
-not affected.
-
-### 12.4 Servers that predate the capability registry
-
-Servers deployed before this specification implement `contacts`, `advert_send`, `regions`,
-`channels_join` and `replay` without listing those names. A server like that sends the legacy
-pairing string (section 12.3). So that clients keep working with them:
-
-* A client whose challenge carried the legacy string `meshcore-open-pair-v1:` MAY treat those five
-  names as present, and MUST handle `unknown_method`, `unsupported` and `bad_request` on such a
-  request as "feature absent".
-* A server that sends the canonical pairing string MUST list every capability it implements.
-  Clients MUST NOT assume any of them for such a server.
-* This rule never covers `tx_path_data`, `tx_path_text` or any other capability. A server that
-  does not know `path` ignores it and floods the packet, so a client MUST NOT send `path` without
-  the capability, whatever the pairing string.
-
 ## 13. Capability registry
 
 ### 13.1 Registered names
@@ -1482,14 +1445,11 @@ Recommended:
 
 ### B.3 Clients
 
-* Sign the challenge's `message` after checking it (section 5.5). The nostrmesh bridge
-  (`localapi.py`) and the LibreTag Android client (`MeshCoreApiClient.kt`) build
-  `meshcore-open-pair-v1:<nonce>` themselves today; they work only with servers that send the
-  legacy form or accept it (section 12.3). The MeshCore-BTC bot (`core/localapi.mjs`) signs
-  `message` but does not check it.
-* Check `hello.capabilities` before using any feature in section 8, with the exception for
-  servers that send the legacy pairing string (section 12.4). Never send `path` without
+* Sign the challenge's `message` after checking it (section 5.5). Clients written before this
+  specification built `meshcore-open-pair-v1:<nonce>` themselves; that string is not accepted.
+* Check `hello.capabilities` before using any feature in section 8. Never send `path` without
   `tx_path_data` or `tx_path_text`.
+* The libraries in this repository (`kotlin/`, `python/`, `js/`) do both.
 
 ## Appendix C. Example session
 

@@ -19,19 +19,19 @@ class PairingTest {
     ).jsonObject
 
     @Test
-    fun `both prefixes are signed exactly as sent`() {
+    fun `the protocol prefix is signed exactly as sent`() {
         assertEquals("meshcore-local-api-pair-v1:$nonce", Pairing.messageToSign(challenge("meshcore-local-api-pair-v1:$nonce")))
-        assertEquals("meshcore-open-pair-v1:$nonce", Pairing.messageToSign(challenge("meshcore-open-pair-v1:$nonce")))
     }
 
     @Test
     fun `anything else is refused`() {
+        assertNull("old meshcore-open prefix", Pairing.messageToSign(challenge("meshcore-open-pair-v1:$nonce")))
         assertNull("foreign string", Pairing.messageToSign(challenge("please sign this transaction")))
         assertNull("other nonce", Pairing.messageToSign(challenge("meshcore-local-api-pair-v1:XXXXXXXXXXXXXXXXXXXX")))
         assertNull("suffix", Pairing.messageToSign(challenge("meshcore-local-api-pair-v1:$nonce:extra")))
         assertNull("no message", Pairing.messageToSign(challenge(null)))
-        assertNull("short nonce", Pairing.messageToSign(challenge("meshcore-open-pair-v1:abc", n = "abc")))
-        assertNull("bad nonce", Pairing.messageToSign(challenge("meshcore-open-pair-v1:a b", n = "a b")))
+        assertNull("short nonce", Pairing.messageToSign(challenge("meshcore-local-api-pair-v1:abc", n = "abc")))
+        assertNull("bad nonce", Pairing.messageToSign(challenge("meshcore-local-api-pair-v1:a b", n = "a b")))
     }
 
     @Test

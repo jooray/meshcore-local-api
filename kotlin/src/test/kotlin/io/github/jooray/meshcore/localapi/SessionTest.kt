@@ -201,7 +201,7 @@ class SessionTest {
         assertFalse(s.canSendPath)
         s.stop()
 
-        server.capabilities = listOf(Capabilities.TX_PATH_DATA)
+        server.capabilities = FakeServer.BASE + Capabilities.TX_PATH_DATA
         val s2 = session()
         s2.start()
         connected(s2)
@@ -226,6 +226,49 @@ class SessionTest {
         server.handler = null
         assertTrue(s.sendData(byteArrayOf(1)).isOk)
         assertEquals(SessionState.Connected("Test node"), s.state.value)
+    }
+
+    @Test
+    fun `without replay the cursor is not sent`() = runBlocking<Unit> {
+        server.capabilities = FakeServer.BASE - Capabilities.REPLAY
+        val s = session(InMemoryCursorStore("2026-01-01T10:00:00.000Z"))
+        s.start()
+        connected(s)
+        val sub = server.nextRequest("events.subscribe")["params"] as JsonObject
+        assertFalse(sub.containsKey("since"))
+    }
+
+    @Test
+    fun `with replay the cursor is sent`() = runBlocking<Unit> {
+        val s = session(InMemoryCursorStore("2026-01-01T10:00:00.000Z"))
+        s.start()
+        connected(s)
+        val sub = server.nextRequest("events.subscribe")["params"] as JsonObject
+        assertEquals("2026-01-01T10:00:00.000Z", sub["since"]!!.jsonPrimitive.content)
+    }
+
+    @Test
+    fun `without regions a send goes out without its region`() = runBlocking<Unit> {
+        server.capabilities = FakeServer.BASE - Capabilities.REGIONS
+        val s = session()
+        s.start()
+        connected(s)
+        server.requests.clear()
+        assertTrue(s.sendData(byteArrayOf(1), region = "xx-test").isOk)
+        val p = server.nextRequest("channel.sendData")["params"] as JsonObject
+        assertFalse(p.containsKey("region"))
+        assertEquals(SessionState.Connected("Test node"), s.state.value)
+    }
+
+    @Test
+    fun `without channels_join a missing channel is not asked for`() = runBlocking<Unit> {
+        server.capabilities = FakeServer.BASE - Capabilities.CHANNELS_JOIN
+        server.channels.clear()
+        val s = session()
+        s.start()
+        withTimeout(5_000) { s.state.first { it == SessionState.ChannelMissing(null) } }
+        delay(200)
+        assertTrue(server.requests.none { it["method"]!!.jsonPrimitive.content == "channels.join" })
     }
 
     @Test
