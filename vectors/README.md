@@ -52,17 +52,7 @@ disagree.
 uv run --with cryptography python vectors/gen/generate.py
 ```
 
-Cross-checks that were run against the two existing servers:
-
-* `gen/rust/vectors.rs` against meshcored's `localapi` crate (`crypto.rs`, `protocol.rs`,
-  `regions.rs`) and `p256` 0.13. All pairing, name, `since` and region vectors pass, and `p256`
-  reproduces every `rHex`/`sHex`. Instructions are at the top of the file.
-* `gen/dart/check_vectors.dart` against MeshCore Open's `local_api_crypto.dart` and copies of the
-  server's name and `since` helpers. All pairing and name vectors pass. Two `since` cases fail
-  because that server accepts a date-time without an offset (`2026-10-26T12:00:00`) and a bare
-  date (`2026-10-26`) as local time; SPEC.md appendix B lists this as a required change.
-
-Path, payload, `dataType`, text and client identity vectors were checked by reading the two
-servers' validation code (`hub.rs` `path_param`, `text_param`, `prepare_send_inner`;
-`local_api_server.dart` `_pathParam`, `_textParam`, `_payloadParam`). Known deviations are in
-SPEC.md appendix A.
+Both servers run these vectors in their own test suites: meshcored in
+`crates/localapi/tests/vectors.rs`, MeshCore Open in
+`test/services/local_api/local_api_vectors_test.dart`. `gen/rust/vectors.rs` and
+`gen/dart/check_vectors.dart` are the standalone checks used while writing the vectors.

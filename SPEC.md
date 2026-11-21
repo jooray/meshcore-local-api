@@ -25,8 +25,8 @@ Conformance vectors are in [`vectors/`](vectors/).
 12. [Versioning and compatibility](#12-versioning-and-compatibility)
 13. [Capability registry](#13-capability-registry)
 14. [References](#14-references)
-- [Appendix A. Differences between the existing servers](#appendix-a-differences-between-the-existing-servers)
-- [Appendix B. Changes for implementers](#appendix-b-changes-for-implementers)
+- [Appendix A. Implementations](#appendix-a-implementations)
+- [Appendix B. Adding the API to a MeshCore app](#appendix-b-adding-the-api-to-a-meshcore-app)
 - [Appendix C. Example session](#appendix-c-example-session)
 
 ## 1. Overview and goals
@@ -1259,197 +1259,64 @@ SHOULD say so to its user rather than fall back silently.
 * MeshCore companion protocol and `docs/number_allocations.md` in the MeshCore firmware
   repository.
 
-## Appendix A. Differences between the existing servers
+## Appendix A. Implementations
 
-Two servers implemented the API before this specification: the MeshCore Open fork (Dart, branch
-`test/localapi-9`, `lib/services/local_api/`) and meshcored (Rust, `crates/localapi`,
-`crates/meshcored/src/`). This appendix lists every difference found in their code, as of the
-versions read for this document. Paths are relative to each repository. "Dart" and "meshcored" name
-the two servers.
+Two servers implement this specification. Both pass the vectors in `vectors/` in their own test
+suites.
 
-### A.1 Transport and handshake
+| | MeshCore Open (fork) | meshcored |
+|---|---|---|
+| Platform | Android, iOS, desktop; radio over BLE, USB or TCP | Linux and macOS daemon; radio over USB serial |
+| Source | `jooray/meshcore-open`, branch `test/localapi-10`, `lib/services/local_api/`; upstream PRs zjs81/meshcore-open#619 and #628 | `crates/localapi`, `crates/meshcored/src/` |
+| Pairing approval | dialog with name and fingerprint, notification when in the background | `meshcored pair approve <fingerprint>`, or a key allowlist in the config |
+| `hello.server.name` | `meshcore-open` | `meshcored` |
 
-1. **`Host` check.** meshcored refuses an upgrade whose `Host` header is not a loopback name
-   (`server.rs` `handle_tcp`, `is_loopback_host`). Dart does not check `Host`
-   (`local_api_server.dart` `_handleRequest`).
-2. **Non-upgrade request.** Dart answers HTTP 426 (`_handleRequest`). meshcored leaves it to
-   tokio-tungstenite's handshake error; the status code was not verified.
-3. **Handshake timeout.** meshcored sends a bare `unauthorized` error before closing with 4001
-   (`server.rs` `handshake`). Dart closes with 4001 without an error frame (`_ApiClient.start`).
-4. **Nonce encoding.** Both use 16 random bytes in base64url. Dart keeps the padding (24
-   characters, `local_api_crypto.dart` `newNonce`); meshcored drops it (22 characters,
-   `crypto.rs` `new_nonce`). Both conform. meshcored's `DESIGN.md` chapter 2 says 32 bytes; the
-   code uses 16.
-5. **Client name and version.** Dart counts UTF-16 code units (`_startChallenge`,
-   `name.length > 64`); meshcored counts code points (`server.rs`, `chars().count()`). meshcored
-   refuses control characters (`clean_identity`); Dart does not.
-6. **Stored key form.** meshcored stores the re-encoded canonical base64 of the decoded key
-   (`server.rs`, `b64().encode(raw)`). Dart stores the string the client sent, and Dart's
-   `base64Decode` also accepts the base64url alphabet, so the same key in two encodings is two
-   different pairings in Dart.
-7. **Permissions.** meshcored stores per-client permissions chosen at approval, used for `raw`
-   (`pairing.rs` `Decision`, `hub.rs` `remember_client`). Dart has no permissions.
-8. **Approval.** Dart shows a dialog with a system notification when in the background
-   (`local_api_pairing.dart`, `local_api_pairing_dialog.dart`). meshcored has no screen: the
-   operator approves with `meshcored pair approve <fingerprint>`, or lists full keys in the
-   config allowlist (`hub.rs` `authorized`), or arms approval for one name for a time window
-   (`DESIGN.md` 7.2). Both conform to section 11.2.
-9. **`hello.server`.** meshcored sends `server: {name, version, mode}` (`hub.rs` `register`).
-   Dart does not.
+Capabilities each one lists:
 
-### A.2 Capabilities
+| Capability | MeshCore Open | meshcored |
+|---|---|---|
+| `contacts` | yes | yes, when the driver has direct messages |
+| `advert_send` | yes | yes |
+| `regions` | yes | yes |
+| `channels_join` | yes | yes |
+| `replay` | yes, when the archive exists | yes |
+| `replay_text` | no | yes |
+| `tx_path_data` | yes | yes |
+| `tx_path_text` | no | yes, firmware ver 12 and later (`CMD_SEND_RAW_PACKET`) |
+| `rx_meta`, `rx_path` | no | yes |
+| `radio_stats`, `airtime`, `noise_floor`, `duty_cap` | no | yes (`duty_cap` when the cap is on) |
+| `raw_rx`, `raw_tx` | no | yes, with the `raw` permission |
 
-10. Dart advertises the fixed list `["tx_path_data"]` (`LocalApiServer.capabilities`), regardless
-    of the connected firmware. meshcored derives its list from the firmware version
-    (`companion.rs` `facts_caps`: `rx_meta` from ver 3, `noise_floor` from 8, `raw_rx`, `raw_tx`,
-    `rx_path`, `tx_path_data`, `tx_path_text` from 13) and adds `airtime` always and `duty_cap`
-    when the cap is on (`hub.rs` `radio_caps`). Neither advertises the features that both
-    implement without a name today (`contacts`, `advert_send`, `regions`, `channels_join`,
-    `replay`).
-11. Dart's prose says paths on `CMD_SEND_CHANNEL_DATA` work from firmware ver 11; meshcored
-    enables `tx_path_data` from ver 13 (`DESIGN.md` 3.3).
+Behaviour that the specification leaves to the implementation and where they differ:
 
-### A.3 Methods and validation
+* meshcored returns `sendId` with `queued`, holds at most 8 waiting sends per connection and
+  answers every send within 10 seconds. MeshCore Open has no waiting-send cap.
+* meshcored keeps the last capability list in its state database and sends it while the radio is
+  away, so a client that connects early does not get a shorter list. MeshCore Open computes the
+  list from its own settings, which do not depend on the radio.
+* MeshCore Open's outgoing events include messages sent from its own chat screen. meshcored has no
+  chat screen.
+* MeshCore Open refuses `path` on `channel.sendText` with `unsupported`, since it does not list
+  `tx_path_text`.
 
-12. **Channel string resolution.** Dart treats a string that parses as an integer as a slot
-    number first (`local_api_host.dart` `resolveChannel`, `int.tryParse`). meshcored looks for the
-    name first and falls back to the slot (`hub.rs` `resolve_channel`). This specification follows
-    meshcored (section 6.6).
-13. **Integer `channel` in `events.subscribe`.** meshcored requires 0 to 255 (`hub.rs`
-    `subscribe`); Dart accepts any integer.
-14. **Error precedence while the radio is away.** meshcored answers `not_connected` before it
-    resolves the channel (`hub.rs` `prepare_send_inner`, `connected_channels`). Dart resolves the
-    channel and validates parameters first and checks the connection in `_send`, so the same
-    request can get `unknown_channel` or a validation error.
-15. **`channels.join` with an existing name and another key.** Dart answers `channel_conflict`
-    (`_joinChannel`, `_sameKey`). meshcored's hub answers `created: false` for any channel with
-    that name without comparing keys (`hub.rs` `join`); the key check in `companion.rs`
-    `add_channel` is not reached for this case.
-16. **`channels.join` consent.** meshcored applies a configured policy (`ask`, `allow`, `deny`)
-    and an `auto_join` list before asking the operator (`hub.rs` `join`, `DESIGN.md` 7.3). Dart
-    always asks the user.
-17. **Known region names.** Dart accepts names from its catalogue and the user's saved regions
-    (`_regionParam`, `RegionStore`). meshcored accepts its built-in catalogue plus regions from the
-    config (`hub.rs` `Hub::start`, `region_param`). Neither lists names without a centre in
-    `regions.list`.
-18. **`direct.sendText` key match.** meshcored matches case-insensitively and accepts a unique
-    prefix of at least 12 hex characters (`hub.rs` `resolve_contact`). Dart requires the exact
-    lowercase 64-character key (`meshcore_connector.dart` `getContactByPubKeyHex`).
-19. **`pubkeys` filter.** meshcored lowercases the filter (`hub.rs` `subscribe`). Dart compares
-    the strings as given, so an upper-case key never matches.
-20. **Send result.** meshcored returns `{queued, sendId}` (`hub.rs` `prepare_send_inner`); Dart
-    returns `{queued}`.
-21. **Waiting sends.** meshcored allows 8 waiting sends per connection (`hub.rs` `reserve_send`,
-    `max_pending_sends`); Dart has no such bound.
-22. **`maybeSent`.** meshcored marks unconfirmed sends (`protocol.rs` `ApiError::maybe_sent`,
-    `hub.rs` `map_radio_err`, `err_msg`). Dart reports every failure as plain `radio_error`,
-    including command timeouts.
-23. **Error codes only in meshcored.** `budget`, `forbidden`, and `unsupported` for event types it
-    knows but does not deliver (`protocol.rs` `FUTURE_EVENT_TYPES`) and for `direct.sendText` on a
-    radio without direct messages. Dart answers `bad_request` for an unknown event type, including
-    `packet.raw`.
-24. **Text length.** Dart counts UTF-16 code units (`_textParam`, `text.length > 2000`);
-    meshcored counts code points (`hub.rs` `text_param`). meshcored also refuses a text sent along
-    a path that does not fit 160 bytes with the sender name (`companion.rs`, `payload_too_large`).
-25. **Payload base64.** Dart's `base64Decode` requires padding and accepts both the standard and
-    the base64url alphabets (`_payloadParam`). meshcored accepts the standard alphabet with or
-    without padding (`hub.rs` `B64_LENIENT`).
-26. **`unsupported_firmware`.** Dart uses the connector's `supportsChannelData`; meshcored checks
-    `firmware_ver_code < 11`. Same intent.
-27. **Unknown values.** Dart sends `null` for an unknown device name, key and firmware version;
-    meshcored sends `""` and `0` (`companion.rs` `info`). Dart's `device.info.radio` is always an
-    object (fields may be null); meshcored sends `null` when unknown. meshcored's companion driver
-    always reports `batteryPercent: null`.
-28. **`contacts.list` `lastSeen`.** Dart always sends a time (`local_api_host.dart` `contacts`);
-    meshcored may send `null` (`mc-radio` `Contact.last_seen`).
-29. **`storageId` and `isPublic`.** Dart's `storageId` is derived from the channel key (first 8
-    bytes of SHA-256 of `"meshcore-channel:"` plus the key, hex, null for an all-zero key;
-    `models/channel.dart` `storageIdForPsk`) and stays the same if the channel moves slot.
-    meshcored's is `companion-<index>` (`companion.rs`). Dart's `isPublic` checks the channel;
-    meshcored's checks `name == "Public"`.
+Clients: the libraries in `kotlin/`, `python/` and `js/` of this repository, used by Roadbeacon,
+LibreTag, the nostrmesh bridges (Python and Android) and the MeshCore-BTC bot. Roadstr has its own
+Kotlin client (roadstrapp/roadstr-app#15).
 
-### A.4 Events
+## Appendix B. Adding the API to a MeshCore app
 
-30. **`receivedAt`.** meshcored makes it strictly increasing with millisecond precision and
-    persists the last value across restarts (`hub.rs` `next_received_at`). Dart uses the event's
-    `DateTime`, which can carry microseconds (six fraction digits from `toIso8601String`) and is
-    not forced to be unique.
-31. **Receive metadata.** meshcored adds `rssiDbm`, `path`, `pathHashSize`, `routeType` when
-    known, and `snrDb`/`hops` also on texts (`hub.rs` `meta_fields`). Dart has `snrDb` and `hops`
-    on `channel.data` only.
-32. **Outgoing events.** Dart's event stream includes sends from its own chat screen
-    (`LocalApiHost.events`). meshcored emits outgoing events for API sends only (`hub.rs`
-    `emit_outgoing`, `emit_outgoing_text`), which is all it has.
-33. **Duplicate direct messages.** meshcored drops a repeated DM with the same sender, `sentAt`
-    and text (`hub.rs` `on_rx`, `recent_dm`). For Dart this depends on the connector and was not
-    checked.
-34. **`packet.raw`.** meshcored only (`hub.rs` `on_rx`, `RawPacket`).
+A short checklist for an app that holds the radio and wants to offer this API:
 
-### A.5 Replay
-
-35. **Text replay.** meshcored archives `channel.text` and `direct.text` and replays them for
-    `since` without the interest rule (`hub.rs` `keep_text`, `subscribe`, `replay_texts`). Dart
-    replays channel data only.
-36. **Slow-consumer metering.** meshcored does not count replayed frames against
-    `maxQueuedBytes` (`hub.rs` `Out::Replay`); Dart counts them (`_enqueue`).
-37. **`since` parsing.** Dart uses `DateTime.tryParse`, which also accepts a date-time without an
-    offset and a bare date, both as local time (`_parseSince`). meshcored accepts RFC 3339 only
-    (`protocol.rs` `parse_since`). See `vectors/README.md`.
-38. **Archive bounds.** Both default to 200 frames and 24 hours; meshcored makes them configurable.
-
-## Appendix B. Changes for implementers
-
-### B.1 MeshCore Open (Dart)
-
-Required to conform:
-
-1. Add the capabilities it already implements to `LocalApiServer.capabilities`: `contacts`,
-   `advert_send`, `regions`, `channels_join`, and `replay` (when the archive is configured).
-   Advertise `tx_path_data` only when the connected firmware supports paths (A.2 11).
-2. Send `meshcore-local-api-pair-v1:<nonce>` as `message`, and accept a signature over either the
-   new or the legacy string for the same nonce (section 12.3).
-3. Refuse `since` strings without an offset and bare dates with `bad_request` (A.5 37).
-4. Count `text`, `client.name` and `client.version` in code points (A.1 5, A.3 24).
-5. Refuse control characters in `client.name` and `client.version` (A.1 5).
-6. Compare `pubkeys` filter entries and the `direct.sendText` key case-insensitively (A.3 18, 19).
-7. Resolve a channel string by name first, then by slot number (section 6.6, A.3 12).
-8. Refuse an integer `channel` in `events.subscribe` outside 0 to 255 (A.3 13).
-
-Recommended:
-
-9. Check `Host` (A.1 1); send a bare `unauthorized` error before closing on handshake timeout
-   (A.1 3).
-10. Identify paired keys by the decoded 64 bytes (A.1 6).
-11. Emit `receivedAt` with millisecond precision, strictly increasing (A.4 30).
-12. Answer `not_connected` before channel lookup errors while the radio is away (A.3 14).
-13. Add `maybeSent: true` to `radio_error` when a command timed out after it was written (A.3 22).
-14. Answer `unsupported` for known extension event types it does not deliver (A.3 23).
-15. Send `hello.server` (A.1 9).
-
-### B.2 meshcored (Rust)
-
-Required to conform:
-
-1. Add the capabilities it already implements: `contacts` (when the driver has direct messages),
-   `advert_send`, `regions`, `channels_join`, `replay`, `replay_text` and `radio_stats`, in
-   `Capabilities::names` or in the hub.
-2. Send `meshcore-local-api-pair-v1:<nonce>` as `message` (`protocol.rs` `PAIRING_PREFIX`), and
-   accept a signature over either string for the same nonce (section 12.3).
-3. In `channels.join`, compare the derived key of an existing channel with the same name and
-   answer `channel_conflict` when it differs (A.3 15).
-
-Recommended:
-
-4. Keep `airtime` meaning "airtime figures in `radio.stats`" now that `radio_stats` names the
-   method; clients that used `airtime` to detect `radio.stats` keep working.
-
-### B.3 Clients
-
-* Sign the challenge's `message` after checking it (section 5.5). Clients written before this
-  specification built `meshcore-open-pair-v1:<nonce>` themselves; that string is not accepted.
-* Check `hello.capabilities` before using any feature in section 8. Never send `path` without
-  `tx_path_data` or `tx_path_text`.
-* The libraries in this repository (`kotlin/`, `python/`, `js/`) do both.
+1. A WebSocket server on `127.0.0.1:8787`, path `/api/v1`, off until the user turns it on. Refuse
+   requests with an `Origin` header and a non-loopback `Host` (section 3).
+2. The handshake and pairing of section 5, with a dialog that shows the client's name and
+   fingerprint. Store only public keys, and let the user remove them.
+3. The core methods and events of sections 6 and 7, sent through the app's normal send path so
+   quiet-wait, flood scope and rate limits still apply.
+4. Optional features from section 8 as the app can support them, each listed in
+   `hello.capabilities`. A small first version can offer the core only.
+5. Run the vectors in `vectors/` in the app's tests. The Dart and Rust test files in `vectors/gen/`
+   show how.
 
 ## Appendix C. Example session
 
