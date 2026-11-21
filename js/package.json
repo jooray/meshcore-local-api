@@ -1,0 +1,27 @@
+{
+  "name": "meshcore-localapi",
+  "version": "0.1.0",
+  "description": "Client for the MeshCore Local API: share a MeshCore host app's radio over a loopback WebSocket",
+  "license": "MIT",
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./src/index.d.ts",
+      "default": "./src/index.mjs"
+    }
+  },
+  "types": "./src/index.d.ts",
+  "files": ["src", "README.md"],
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "test": "node --test test/"
+  },
+  "optionalDependencies": {
+    "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "ws": "^8.18.0"
+  }
+}
