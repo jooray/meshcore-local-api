@@ -464,6 +464,7 @@ class MeshCoreApiClient(
             "regions.resolve" to Capabilities.REGIONS,
             "channels.join" to Capabilities.CHANNELS_JOIN,
             "radio.stats" to Capabilities.RADIO_STATS,
+            "radio.reboot" to Capabilities.RADIO_REBOOT,
         )
 
         /**

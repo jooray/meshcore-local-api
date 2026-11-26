@@ -47,6 +47,8 @@ object Capabilities {
     const val RX_QUEUED = "rx_queued"
     /** `channel.sendData` takes `"priority": "now"` and its result carries `sentAt`. */
     const val TX_NOW = "tx_now"
+    /** `radio.reboot`: reboot the radio by command (section 8.17). */
+    const val RADIO_REBOOT = "radio_reboot"
     const val RAW_RX = "raw_rx"
     const val RAW_TX = "raw_tx"
     const val TX_RESULT = "tx_result"

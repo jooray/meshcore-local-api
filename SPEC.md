@@ -433,6 +433,12 @@ No parameters. Returns the radio's identity and state.
 `device.info` MUST answer even when the radio is not usable; it then reports `connected: false`
 and whatever it last knew.
 
+`connected` is the state of the radio itself, read when the request is answered, not the state of
+the host app or of the API session. It is `false` while the host cannot open the radio's port,
+while the link to the radio is being set up again, and while the radio does not answer the
+host's commands. A server that keeps a cached device state MUST NOT answer `connected: true` from
+the cache when its radio driver already knows the link is down.
+
 ### 6.2 `channels.list`
 
 No parameters. Returns `{"channels": [...]}`, one entry per configured channel slot:
@@ -666,7 +672,9 @@ whenever it changes after `hello`:
 Rules:
 
 * The server MUST send a `device` push when `connected`, the node identity or the channel list
-  changes. It MUST NOT send a push whose content equals the last one sent to that connection (or
+  changes. This includes every loss of the link to the radio (a port that closes or cannot be
+  opened, a radio that stops answering) and every return, also when the API connection itself
+  stays healthy throughout. It MUST NOT send a push whose content equals the last one sent to that connection (or
   the `hello`, for the first push). It MUST NOT put values that change often (battery, noise,
   counters) into the push.
 * The server MAY coalesce bursts of changes; it SHOULD send the push within one second of the
@@ -974,6 +982,24 @@ Adds the method `radio.stats` (no parameters). Every field may be null when unkn
 | `defaultRegion` | string | The flood scope used when a send names none. |
 | `airtime` | object | `tx60sMs`, `tx1hMs` (transmit time in the last minute and hour), `budgetMs`, `budgetRemainingMs` (the server's airtime cap, when it enforces one). |
 | `counters` | object | `rx`, `tx`, `txErrors` and further implementation-defined counters (integers). |
+| `link` | object | Optional. The health of the link to the radio, below. |
+
+`connected` follows the rule of section 6.1: it is the radio's state when `radio.stats` is answered.
+
+`link` lets a client see a radio that still answers but is in trouble, and how fresh the numbers
+are. Every field may be absent or null:
+
+| Field | Type | Meaning |
+|---|---|---|
+| `state` | string | Implementation-defined link state, for example `ready`, `opening`, `handshake`, `syncing`, `disconnected`, `port_wedged`. |
+| `lateReplies` | integer | Answers from the radio that came after the host had given up waiting for them, since the server started. |
+| `slowHeartbeats` | integer | Liveness checks the radio answered, but slowly (meshcored: after more than 2 s). |
+| `unansweredHeartbeats` | integer | Liveness checks the radio did not answer in time. |
+| `lastHeartbeatOkAt` | time | When the radio last answered a liveness check. A server that answers `radio.stats` from a cache tells the client here how old its knowledge is. |
+| `portWedged` | boolean | The host cannot open the radio's port at all and does not expect it to recover without a power cycle (for example a USB serial adapter that macOS answers with EINVAL). |
+
+The counters only grow while the server runs. A client compares two answers: growing
+`lateReplies`, `slowHeartbeats` or `unansweredHeartbeats` mean a radio that is about to stall.
 
 The server MAY add fields (for example `mode`). Related capabilities describe what the numbers
 mean:
@@ -1081,6 +1107,26 @@ applied:
 
 `sentAt` is when the radio took the packet, not when it finished transmitting. A client that
 times a send against a deadline compares `sentAt` with its own clock.
+
+### 8.17 `radio_reboot`: rebooting the radio by command
+
+Adds the method `radio.reboot` (no parameters). The server tells the radio to reboot (MeshCore
+companion `CMD_REBOOT` with the argument `reboot`), for a radio that still answers but has become
+slow or deaf. It does not power-cycle anything.
+
+* Only while the radio is usable; otherwise `not_connected`. A server MAY refuse a second reboot
+  shortly after the first with `rate_limited` (meshcored: one per minute).
+* The result `{"rebooting": true}` comes once the command was written; the radio does not answer
+  it. The server then sends a `device` push with `connected: false`, and one with
+  `connected: true` when the radio is back. Events received before the reboot and still in the
+  radio's RAM are lost.
+* Any paired client may call it. A host app that wants to keep this to the user SHOULD NOT list
+  the capability.
+
+```json
+{"id":9,"method":"radio.reboot"}
+{"id":9,"ok":true,"result":{"rebooting":true}}
+```
 
 ## 9. Limits
 
@@ -1312,6 +1358,7 @@ SHOULD say so to its user rather than fall back silently.
 | `rx_scope` | `transportCode`, `scope` on received events | 8.14 | |
 | `rx_queued` | `queued` on received events | 8.15 | |
 | `tx_now` | `priority` on `channel.sendData`, `sentAt` in its result | 8.16 | |
+| `radio_reboot` | `radio.reboot` | 8.17 | |
 
 ### 13.2 Rules for new names
 
@@ -1364,8 +1411,9 @@ Capabilities each one lists:
 | `tx_path_data` | yes | yes |
 | `tx_path_text` | no | yes, firmware ver 12 and later (`CMD_SEND_RAW_PACKET`) |
 | `rx_meta`, `rx_path` | yes, on `channel.data` only | yes |
-| `rx_scope`, `rx_queued`, `tx_now` | yes, on `channel.data` only | no |
-| `radio_stats`, `airtime`, `noise_floor`, `duty_cap` | no | yes (`duty_cap` when the cap is on) |
+| `rx_scope`, `rx_queued`, `tx_now` | yes, on `channel.data` only | yes (`rx_scope` with firmware ver 13 and later) |
+| `radio_reboot` | no | yes |
+| `radio_stats`, `airtime`, `noise_floor`, `duty_cap` | no | yes (`duty_cap` when the cap is on; `radio.stats` has `link`) |
 | `raw_rx`, `raw_tx` | no | yes, with the `raw` permission |
 
 Behaviour that the specification leaves to the implementation and where they differ:
@@ -1379,8 +1427,16 @@ Behaviour that the specification leaves to the implementation and where they dif
   chat screen.
 * MeshCore Open refuses `path` on `channel.sendText` with `unsupported`, since it does not list
   `tx_path_text`.
-* MeshCore Open advertises `minSendGapExemptBytes: 32`, so an acknowledgement and a command of
-  one client can leave a few hundred milliseconds apart.
+* Both advertise `minSendGapExemptBytes: 32`, so an acknowledgement and a command of one client
+  can leave a few hundred milliseconds apart.
+* meshcored marks as `queued` what it drains from the node after a connect until the node first
+  reports its queue empty, except frames it saw live in the raw receive push. It resolves `scope`
+  against its region catalogue (the built-in one plus `[[regions]]` from its config).
+* meshcored applies `"priority": "now"` to packets of at most 40 bytes on air: they go ahead of
+  waiting sends, also during another send's quiet-wait, and skip the quiet-wait themselves.
+* meshcored reports the port as wedged (`link.portWedged`) after three opens in a row fail with
+  EINVAL and can run an operator command then, for example one that switches a USB hub port off
+  and on.
 
 Clients: the libraries in `kotlin/`, `python/` and `js/` of this repository, used by Roadbeacon,
 LibreTag, the nostrmesh bridges (Python and Android) and the MeshCore-BTC bot. Roadstr has its own

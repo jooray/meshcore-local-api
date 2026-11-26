@@ -34,7 +34,7 @@ METHOD_TIMEOUTS = {"channels.join": 150.0}
 METHOD_CAPABILITIES = {
     "contacts.list": "contacts", "direct.sendText": "contacts", "advert.send": "advert_send",
     "regions.list": "regions", "regions.resolve": "regions", "channels.join": "channels_join",
-    "radio.stats": "radio_stats", "packet.sendRaw": "raw_tx",
+    "radio.stats": "radio_stats", "packet.sendRaw": "raw_tx", "radio.reboot": "radio_reboot",
 }
 # Event types and subscription filters that need a capability.
 EVENT_CAPABILITIES = {"direct.text": "contacts", "advert": "contacts", "packet.raw": "raw_rx"}
