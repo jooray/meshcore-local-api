@@ -8,7 +8,7 @@ plugins {
 
 // JitPack passes -Pgroup and -Pversion (the tag); keep those when given.
 if (group.toString().isEmpty()) group = "com.github.jooray"
-if (version == Project.DEFAULT_VERSION) version = "0.1.0"
+if (version == Project.DEFAULT_VERSION) version = "0.2.0"
 
 java {
     // Android with minSdk 26 desugars Java 8 bytecode; nothing newer is needed.

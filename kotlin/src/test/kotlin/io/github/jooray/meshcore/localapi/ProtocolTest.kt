@@ -68,6 +68,15 @@ class ProtocolTest {
         assertArrayEquals(byteArrayOf(0xa1.toByte(), 0xb2.toByte(), 0xc3.toByte(), 0xd4.toByte()), routed.path)
         assertEquals(2, routed.pathHashSize)
         assertEquals(-101.5, routed.rssiDbm!!, 0.0)
+        assertNull(routed.transportCode)
+        assertNull(routed.scope)
+        assertEquals(false, routed.queued)
+        // rx_scope and rx_queued (sections 8.14, 8.15)
+        val scoped = MeshEvent.parse(event(""","routeType":"tflood","transportCode":4242,"scope":"sk-test","queued":true""")) as MeshEvent.ChannelData
+        assertEquals(4242, scoped.transportCode)
+        assertEquals("sk-test", scoped.scope)
+        assertEquals(true, scoped.queued)
+        assertNull("out of range", (MeshEvent.parse(event(""","transportCode":70000""")) as MeshEvent.ChannelData).transportCode)
         val zero = MeshEvent.parse(event(""","path":"","pathHashSize":1""")) as MeshEvent.ChannelData
         assertEquals(0, zero.path!!.size)
         assertNull("odd path for its hash size", (MeshEvent.parse(event(""","path":"a1b2c3","pathHashSize":2""")) as MeshEvent.ChannelData).path)

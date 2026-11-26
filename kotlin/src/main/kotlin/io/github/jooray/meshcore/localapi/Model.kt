@@ -41,6 +41,12 @@ object Capabilities {
     const val RX_PATH = "rx_path"
     /** Received events carry `snrDb`, `rssiDbm`, `hops`, `routeType`. */
     const val RX_META = "rx_meta"
+    /** Received events carry `transportCode` and, when the server matched one name, `scope` (section 8.14). */
+    const val RX_SCOPE = "rx_scope"
+    /** Received events the radio held in its offline queue carry `queued: true` (section 8.15). */
+    const val RX_QUEUED = "rx_queued"
+    /** `channel.sendData` takes `"priority": "now"` and its result carries `sentAt`. */
+    const val TX_NOW = "tx_now"
     const val RAW_RX = "raw_rx"
     const val RAW_TX = "raw_tx"
     const val TX_RESULT = "tx_result"
@@ -297,13 +303,20 @@ sealed interface MeshEvent {
         val routeType: String? = null,
         /** `rx_meta`. */
         val rssiDbm: Double? = null,
+        /** `rx_scope`: the packet's first transport code (`code[0]`, 0..65535); null for a packet without one. */
+        val transportCode: Int? = null,
+        /** `rx_scope`: the flood-scope name (no leading `#`) the server matched to [transportCode], when exactly one did. */
+        val scope: String? = null,
+        /** `rx_queued`: the radio held this frame in its offline queue; its `receivedAt` is not the time on air. */
+        val queued: Boolean = false,
     ) : MeshEvent {
         override fun equals(other: Any?): Boolean = other is ChannelData &&
             channel == other.channel && channelIndex == other.channelIndex && dataType == other.dataType &&
             payload.contentEquals(other.payload) && snrDb == other.snrDb && hops == other.hops &&
             receivedAt == other.receivedAt && outgoing == other.outgoing &&
             sameBytes(path, other.path) &&
-            pathHashSize == other.pathHashSize && routeType == other.routeType && rssiDbm == other.rssiDbm
+            pathHashSize == other.pathHashSize && routeType == other.routeType && rssiDbm == other.rssiDbm &&
+            transportCode == other.transportCode && scope == other.scope && queued == other.queued
 
         override fun hashCode(): Int =
             ((channel.hashCode() * 31 + dataType) * 31 + payload.contentHashCode()) * 31 + (receivedAt?.hashCode() ?: 0)
@@ -394,6 +407,9 @@ sealed interface MeshEvent {
                 pathHashSize = hashSize,
                 routeType = event.string("routeType"),
                 rssiDbm = event.double("rssiDbm"),
+                transportCode = event.int("transportCode")?.takeIf { it in 0..0xFFFF },
+                scope = event.string("scope")?.takeIf { it.isNotEmpty() },
+                queued = event.bool("queued") == true,
             )
         }
     }
