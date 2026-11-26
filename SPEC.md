@@ -515,8 +515,8 @@ Sends share these rules:
 * The server SHOULD answer every send within 10 seconds. If a send cannot reach the radio in that
   time, the server SHOULD cancel it and answer `radio_error`, so that a client that gives up does
   not see its message sent later. Clients SHOULD wait at least 15 seconds for a send response.
-* Optional parameters of a send that need a capability (`region`, `path`, `pathHashSize`) are
-  described in section 8. A client MUST NOT send them unless the capability is in
+* Optional parameters of a send that need a capability (`region`, `path`, `pathHashSize`,
+  `priority`) are described in section 8. A client MUST NOT send them unless the capability is in
   `hello.capabilities`.
 
 #### `channel.sendData`
@@ -530,6 +530,7 @@ Sends binary data to a channel (MeshCore `CMD_SEND_CHANNEL_DATA`).
 | `payload` | string | Base64 of 1 to `limits.maxPayloadBytes` bytes. Longer: `payload_too_large`. Missing, empty or not base64: `bad_request`. |
 | `region` | string, optional | Feature `regions` (section 8.3). |
 | `path`, `pathHashSize` | optional | Feature `tx_path_data` (section 8.7). |
+| `priority` | string, optional | Feature `tx_now` (section 8.16). |
 
 If the radio firmware cannot send channel data (MeshCore firmware older than `FIRMWARE_VER_CODE`
 11), the request fails with `unsupported_firmware`.
@@ -608,7 +609,7 @@ the server emitted it. It is the replay cursor (section 8.5).
 | `outgoing` | boolean | `true` for data sent through this radio (section 7.5). |
 | `receivedAt` | time | Section 7.1. |
 
-Feature `rx_meta` and `rx_path` add fields (sections 8.9, 8.10).
+Features `rx_meta`, `rx_path`, `rx_scope` and `rx_queued` add fields (sections 8.9, 8.10, 8.14, 8.15).
 
 ```json
 {"type":"event","subscriptionId":"s1","event":{"type":"channel.data","channel":"#roadstr","channelIndex":1,"dataType":336,"payload":"AQIDBA==","snrDb":-7.25,"hops":2,"outgoing":false,"receivedAt":"2026-10-26T12:00:00.000Z"}}
@@ -1022,6 +1023,65 @@ Reserved for a future event `send.result` that reports when a send actually left
 in `events` and only to the connection that sent. Companion firmware does not report this, so no
 current server offers it. The name is reserved so that it is not used for something else.
 
+### 8.14 `rx_scope`: flood scope of received packets
+
+Received `channel.data` events (and, where the server says so, other received events) of a packet
+with transport codes (`routeType` `tflood` or `tdirect`) carry, when known:
+
+| Field | Type | Meaning |
+|---|---|---|
+| `transportCode` | integer | The packet's first transport code (`code[0]`, little-endian, 0 to 65535). It is derived from the flood-scope key and the packet, so it names the scope only together with the packet. |
+| `scope` | string | The flood-scope name, without a leading `#`, whose key gives `transportCode` for this packet, when exactly one of the names the server knows does. Absent when none or several match. |
+
+A client that answers in the scope a packet came in uses `scope` with the `region` parameter
+(section 8.3), or tests the names it knows against `transportCode` when it has the packet. A
+packet without transport codes has neither field; it was sent unscoped or direct.
+
+### 8.15 `rx_queued`: frames from the radio's offline queue
+
+MeshCore companion firmware keeps what it receives while no app reads it, and the app drains that
+queue after it connects. Such a frame was heard at an unknown earlier time, and its `receivedAt`
+is the time the server fetched it.
+
+| Field | Type | Meaning |
+|---|---|---|
+| `queued` | boolean | `true` on a received event the radio held in its offline queue while no app was reading it. Absent or `false` on a live event. |
+
+A server marks every event it drains after a connect, before the radio first reports the queue
+empty, unless it knows the packet was heard live (for example from `PUSH_CODE_LOG_RX_DATA`, section
+8.10). A client MUST NOT take the `receivedAt` of a `queued` event as the time the packet was on
+the air. Without this capability a client cannot tell queued frames from live ones and SHOULD
+treat events in the first seconds after `device.connected` turns true as of unknown age.
+
+A server with `rx_queued` SHOULD give a live event the time the radio heard the packet as its
+`receivedAt` when it has it (the raw RX push), not the time it fetched the decoded frame, within
+the ordering rule of section 7.1.
+
+### 8.16 `tx_now`: sends that must not wait
+
+The parameter `priority` on `channel.sendData`:
+
+| Value | Meaning |
+|---|---|
+| absent, null or `"normal"` | The send goes through the host's usual pacing (section 6.5). |
+| `"now"` | The server skips its own back-off after received traffic and its wait for a quiet radio, and does not queue the send behind other sends' waits where it can avoid it. The firmware's own listen-before-talk still applies. |
+
+Any other value is `bad_request`. A server applies `"now"` only to small packets: it advertises
+nothing, but MeshCore Open applies it to packets of at most 40 bytes on air. A larger packet is
+sent with the normal waits.
+
+With this capability every `channel.sendData` result carries `sentAt` (time), when the radio
+acknowledged the command, and, when the request had `priority`, `priority` with the value that was
+applied:
+
+```json
+{"id":7,"method":"channel.sendData","params":{"channel":"#libretag","dataType":65356,"payload":"…","path":"","priority":"now"}}
+{"id":7,"ok":true,"result":{"queued":true,"sentAt":"2026-11-26T12:00:12.215Z","priority":"now"}}
+```
+
+`sentAt` is when the radio took the packet, not when it finished transmitting. A client that
+times a send against a deadline compares `sentAt` with its own clock.
+
 ## 9. Limits
 
 ### 9.1 Advertised limits
@@ -1036,6 +1096,7 @@ NOT assume the defaults.
 | `maxQueuedBytes` | Outbound bytes queued for a connection and not yet taken by the operating system. A client that stops reading is closed with 4013 instead of growing the server's memory. | 262144 |
 | `sendsPerMinute` | Sends per connection in any 60-second window. | 30 |
 | `minSendGapMs` | Minimum time between two sends of one connection. | 2000 |
+| `minSendGapExemptBytes` | Optional. A `channel.sendData` payload of at most this many bytes may follow the previous send closer than `minSendGapMs`; it still counts in `sendsPerMinute`. Absent: no exemption. | 32 |
 | `maxSubscriptions` | Subscriptions per connection. | 16 |
 | `maxFilterEntries` | Entries in each of `dataTypes`, `pubkeys`, `payloadTypes`. | 32 |
 
@@ -1248,6 +1309,9 @@ SHOULD say so to its user rather than fall back silently.
 | `raw_rx` | event `packet.raw`, filter `payloadTypes` | 8.12 | needs permission `raw` |
 | `raw_tx` | `packet.sendRaw` | 8.12 | needs permission `raw` |
 | `tx_result` | event `send.result` | 8.13 | reserved |
+| `rx_scope` | `transportCode`, `scope` on received events | 8.14 | |
+| `rx_queued` | `queued` on received events | 8.15 | |
+| `tx_now` | `priority` on `channel.sendData`, `sentAt` in its result | 8.16 | |
 
 ### 13.2 Rules for new names
 
@@ -1300,6 +1364,7 @@ Capabilities each one lists:
 | `tx_path_data` | yes | yes |
 | `tx_path_text` | no | yes, firmware ver 12 and later (`CMD_SEND_RAW_PACKET`) |
 | `rx_meta`, `rx_path` | yes, on `channel.data` only | yes |
+| `rx_scope`, `rx_queued`, `tx_now` | yes, on `channel.data` only | no |
 | `radio_stats`, `airtime`, `noise_floor`, `duty_cap` | no | yes (`duty_cap` when the cap is on) |
 | `raw_rx`, `raw_tx` | no | yes, with the `raw` permission |
 
@@ -1314,6 +1379,8 @@ Behaviour that the specification leaves to the implementation and where they dif
   chat screen.
 * MeshCore Open refuses `path` on `channel.sendText` with `unsupported`, since it does not list
   `tx_path_text`.
+* MeshCore Open advertises `minSendGapExemptBytes: 32`, so an acknowledgement and a command of
+  one client can leave a few hundred milliseconds apart.
 
 Clients: the libraries in `kotlin/`, `python/` and `js/` of this repository, used by Roadbeacon,
 LibreTag, the nostrmesh bridges (Python and Android) and the MeshCore-BTC bot. Roadstr has its own
