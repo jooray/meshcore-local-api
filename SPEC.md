@@ -931,6 +931,10 @@ Received `channel.data`, `channel.text` and `direct.text` events carry these fie
 
 A zero-hop packet has `hops: null`, `routeType: "direct"` and, with `rx_path`, `path: ""`.
 
+A server MAY list `rx_meta` and fill the fields only for some event types or some packets (for
+example not for frames the radio queued while no app was connected); clients MUST treat a missing
+field as unknown.
+
 ### 8.10 `rx_path`: receive path
 
 Received `channel.data`, `channel.text` and `direct.text` events carry, when known:
@@ -942,6 +946,18 @@ Received `channel.data`, `channel.text` and `direct.text` events carry, when kno
 
 A client that wants to answer along the same route reverses the hop order and sends with
 `tx_path_data`.
+
+The path is the one the packet carried when this radio heard it. For a flood packet that is every
+repeater it passed. A direct packet loses one hash at each hop, so it arrives with an empty path
+whether it was sent zero-hop or along a route; `path: ""` means heard from the sender's radio only
+together with `routeType` `flood` or `tflood`, or when the client knows the sender sends direct
+packets zero-hop only.
+
+In MeshCore companion firmware the path and RSSI are not in the decrypted channel frames
+(`RESP_CODE_CHANNEL_DATA_RECV`, `RESP_CODE_CHANNEL_MSG_RECV_V3`), which carry the SNR and the
+packed path length (`0xFF` for a direct packet). A server takes them from `PUSH_CODE_LOG_RX_DATA`
+(0x88), sent for every packet the radio hears while an app is connected, and pairs that packet
+with the frame by decrypting it with the channel key.
 
 ### 8.11 `radio_stats` and related capabilities
 
@@ -1283,7 +1299,7 @@ Capabilities each one lists:
 | `replay_text` | no | yes |
 | `tx_path_data` | yes | yes |
 | `tx_path_text` | no | yes, firmware ver 12 and later (`CMD_SEND_RAW_PACKET`) |
-| `rx_meta`, `rx_path` | no | yes |
+| `rx_meta`, `rx_path` | yes, on `channel.data` only | yes |
 | `radio_stats`, `airtime`, `noise_floor`, `duty_cap` | no | yes (`duty_cap` when the cap is on) |
 | `raw_rx`, `raw_tx` | no | yes, with the `raw` permission |
 
